@@ -1,0 +1,13 @@
+{
+  "name": "helao2-low-poly-wilds",
+  "version": "1.0.0",
+  "description": "HELAO2: Low Poly Wilds — a low-poly sci-fi adventure shooter with co-op multiplayer (Three.js + ws)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}
