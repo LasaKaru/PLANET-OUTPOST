@@ -168,6 +168,14 @@ const SFX = (() => {
     scan()    { tone('sine', 880, 1760, 0.25, 0.15); setTimeout(() => tone('sine', 1320, 1320, 0.12, 0.12), 240); },
     powerup() { tone('sawtooth', 110, 440, 0.6, 0.2); setTimeout(() => tone('sine', 660, 1320, 0.4, 0.18), 500); },
     click()   { tone('triangle', 700, 500, 0.05, 0.12); },
+    hover()   { tone('triangle', 900, 800, 0.03, 0.05); },
+    step()    { noise(0.07, 0.09, 480 + srand() * 160); },
+    land()    { noise(0.12, 0.2, 350); tone('sine', 140, 70, 0.1, 0.12); },
+    chirp() {
+      const f = 800 + srand() * 900;
+      tone('sine', f, f * 1.4, 0.09, 0.07);
+      setTimeout(() => tone('sine', f * 1.2, f * 0.9, 0.07, 0.05), 110);
+    },
     unlock()  { [0, 120, 240].forEach((d, i) => setTimeout(() => tone('sine', 520 * (1 + i * 0.25), 520 * (1 + i * 0.25), 0.18, 0.2), d)); },
   };
 })();
@@ -924,6 +932,278 @@ makeArch(-8, 72, 0.5); makeArch(80, -30, -0.9); makeArch(-78, 20, 1.2);
 makeOutcrop(100, -60); makeOutcrop(-110, -100); makeOutcrop(115, 80);
 scatterPickups();
 
+/* =====================================================================
+   WORLD DENSITY PASS — instanced stalk-tree forests, coral ground
+   cover, pebbles, flower drifts, extra roads, outposts & animated
+   structures. Instancing keeps hundreds of props at ~1 draw call each.
+   ===================================================================== */
+const envAnims = [];   // {fn(dt,t)} animated environment bits
+let envT = 0;
+function updateEnvAnims(dt) {
+  envT += dt;
+  for (const a of envAnims) a(dt, envT);
+}
+function clearOfSites(x, z, roadMin = 3) {
+  if (Math.hypot(x - TOWER_POS.x, z - TOWER_POS.z) < 24) return false;
+  if (Math.hypot(x - CAMPER_POS.x, z - CAMPER_POS.z) < 13) return false;
+  if (inRavine(x, z)) return false;
+  if (distToRoad(x, z) < roadMin) return false;
+  return true;
+}
+
+/* ---- tall stalk trees (splash-art style: blob canopy on thin trunk) */
+(function stalkForest() {
+  const N = 220;
+  const trunkGeo2 = new THREE.CylinderGeometry(0.09, 0.14, 1, 4);
+  const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
+  const trunkInst = new THREE.InstancedMesh(trunkGeo2, MAT.trunk, N);
+  const canopyInst = new THREE.InstancedMesh(canopyGeo,
+    mat(0xffffff), N);            // white base — tinted per instance
+  const cols = [PAL.teal, PAL.mint, PAL.yellow, PAL.orange, PAL.pink, PAL.blue, PAL.magenta, 0xd94f4f]
+    .map(c => new THREE.Color(c));
+  const dummy = new THREE.Object3D();
+  let i = 0, guard = 0;
+  const half = WORLD_SIZE / 2 - 8;
+  while (i < N && guard++ < 3000) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (!clearOfSites(x, z)) continue;
+    const gy = terrainHeight(x, z);
+    const h = rand(3.5, 7.5), r = rand(0.8, 1.6);
+    // trunk
+    dummy.position.set(x, gy + h / 2, z);
+    dummy.scale.set(1, h, 1);
+    dummy.rotation.set(0, rand(0, Math.PI), rand(-0.05, 0.05));
+    dummy.updateMatrix();
+    trunkInst.setMatrixAt(i, dummy.matrix);
+    // canopy
+    dummy.position.set(x, gy + h + r * 0.9, z);
+    dummy.scale.set(r, r * rand(1.4, 2.0), r);
+    dummy.rotation.set(rand(-0.1, 0.1), rand(0, Math.PI), rand(-0.1, 0.1));
+    dummy.updateMatrix();
+    canopyInst.setMatrixAt(i, dummy.matrix);
+    canopyInst.setColorAt(i, pick(cols));
+    circleColliders.push({ x, z, r: 0.3 });
+    i++;
+  }
+  trunkInst.count = i; canopyInst.count = i;
+  if (canopyInst.instanceColor) canopyInst.instanceColor.needsUpdate = true;
+  canopyInst.castShadow = true;
+  scene.add(trunkInst); scene.add(canopyInst);
+})();
+
+/* ---- coral ground cover (the orange-red carpet from the refs) ---- */
+(function coralCover() {
+  const N = 600;
+  const geo = new THREE.IcosahedronGeometry(0.3, 0);
+  const inst = new THREE.InstancedMesh(geo, mat(0xffffff, { roughness: 1 }), N);
+  const cols = [0xd4593c, 0xe06a4a, 0xc44a30, 0xe86a9e].map(c => new THREE.Color(c));
+  const dummy = new THREE.Object3D();
+  // grow in drifts around 40 cluster points
+  const clusters = [];
+  for (let c = 0; c < 40; c++) {
+    const x = rand(-130, 130), z = rand(-130, 130);
+    if (clearOfSites(x, z, 2.5)) clusters.push([x, z]);
+  }
+  let i = 0, guard = 0;
+  while (i < N && guard++ < 4000 && clusters.length) {
+    const [cx, cz] = pick(clusters);
+    const x = cx + rand(-6, 6), z = cz + rand(-6, 6);
+    if (!clearOfSites(x, z, 2.5)) continue;
+    dummy.position.set(x, terrainHeight(x, z) + 0.1, z);
+    dummy.scale.set(rand(0.6, 1.6), rand(0.4, 0.9), rand(0.6, 1.6));
+    dummy.rotation.y = rand(0, Math.PI);
+    dummy.updateMatrix();
+    inst.setMatrixAt(i, dummy.matrix);
+    inst.setColorAt(i, pick(cols));
+    i++;
+  }
+  inst.count = i;
+  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+  scene.add(inst);
+})();
+
+/* ---- pebbles & extra flower drifts ---- */
+(function pebblesAndFlowers() {
+  const dummy = new THREE.Object3D();
+  const peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.22, 0), MAT.rock, 420);
+  for (let i = 0; i < 420; i++) {
+    const x = rand(-135, 135), z = rand(-135, 135);
+    dummy.position.set(x, terrainHeight(x, z) + 0.08, z);
+    dummy.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3));
+    dummy.scale.setScalar(rand(0.5, 1.8));
+    dummy.updateMatrix(); peb.setMatrixAt(i, dummy.matrix);
+  }
+  peb.receiveShadow = true;
+  scene.add(peb);
+  // taller flowers on stems, 3 color groups
+  for (const col of [0xffe08a, 0xe86a9e, 0x8ab8ff]) {
+    const N = 220;
+    const inst = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.14, 0),
+      mat(col, { emissive: col, emissiveIntensity: 0.35 }), N);
+    for (let i = 0; i < N; i++) {
+      const x = rand(-130, 130), z = rand(-130, 130);
+      dummy.position.set(x, terrainHeight(x, z) + rand(0.3, 0.7), z);
+      dummy.scale.setScalar(rand(0.6, 1.3));
+      dummy.rotation.y = rand(0, Math.PI);
+      dummy.updateMatrix(); inst.setMatrixAt(i, dummy.matrix);
+    }
+    scene.add(inst);
+  }
+})();
+
+/* ---- more regular trees, rocks, arches, outcrops ---- */
+(function moreNature() {
+  const half = WORLD_SIZE / 2 - 8;
+  let placed = 0, guard = 0;
+  while (placed < 70 && guard++ < 900) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (!clearOfSites(x, z, 4)) continue;
+    makeTree(x, z, rand(0.8, 1.7)); placed++;
+  }
+  for (let i = 0; i < 65; i++) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (!clearOfSites(x, z, 3)) continue;
+    makeRock(x, z, rand(0.4, 2.2));
+  }
+  makeArch(48, 110, -0.4);
+  makeArch(-125, -55, 0.2);
+  makeOutcrop(-30, 120); makeOutcrop(130, 10);
+  for (let i = 0; i < 26; i++) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (distToRoad(x, z) < 3) continue;
+    makeMushrooms(x, z);
+  }
+})();
+
+/* ---- extra roads: north arch loop & southeast trail ---- */
+buildRoad([[TOWER_POS.x, TOWER_POS.z], [-20, -70], [10, -95], [30, -112]]);
+buildRoad([[CAMPER_POS.x, CAMPER_POS.z], [85, 70], [110, 100]]);
+
+/* =====================================================================
+   NEW BUILDINGS — small outposts scattered through the wilds
+   ===================================================================== */
+function registerStructure(g, x, z, w, d, top) {
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  addBoxCollider(x, z, w, d, top);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; cameraBlockers.push(o); losBlockers.push(o); } });
+  return g;
+}
+
+/* ---- radar station: gray hut + slowly sweeping dish ---- */
+(function radarStation() {
+  const g = new THREE.Group();
+  const hut = new THREE.Mesh(new THREE.BoxGeometry(4.5, 2.6, 3.4), MAT.grayLight);
+  hut.position.y = 1.3; g.add(hut);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.4, 3.5), MAT.techBlue);
+  stripe.position.y = 2.2; g.add(stripe);
+  const win = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.7, 0.2), MAT.windowGlow);
+  win.position.set(0, 1.5, 1.75); g.add(win);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 2.4, 5), MAT.grayDark);
+  mast.position.y = 3.8; g.add(mast);
+  const dish = new THREE.Group();
+  const bowl = new THREE.Mesh(new THREE.ConeGeometry(1.3, 0.6, 8), MAT.grayLight);
+  bowl.rotation.x = -Math.PI / 2.4; dish.add(bowl);
+  const tip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 1.0), MAT.redGlow);
+  tip.rotation.x = -Math.PI / 2.4; tip.position.set(0, 0.25, 0.4); dish.add(tip);
+  dish.position.y = 5.2; g.add(dish);
+  envAnims.push(dt => { dish.rotation.y += dt * 0.7; });
+  registerStructure(g, -95, -30, 5, 4, 4);
+})();
+
+/* ---- greenhouse dome: glowing alien plants under a frame dome ---- */
+(function greenhouse() {
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.4, 0.7, 8), MAT.grayMid);
+  base.position.y = 0.35; g.add(base);
+  const dome = new THREE.Mesh(new THREE.IcosahedronGeometry(3, 1),
+    mat(0x8fd8d0, { transparent: true, opacity: 0.24, roughness: 0.2 }));
+  dome.scale.y = 0.75; dome.position.y = 0.7; g.add(dome);
+  // frame ribs
+  for (let i = 0; i < 5; i++) {
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(3, 0.06, 4, 12, Math.PI), MAT.grayDark);
+    rib.rotation.y = i * Math.PI / 5;
+    rib.scale.y = 0.75; rib.position.y = 0.7;
+    g.add(rib);
+  }
+  // glowing plants inside
+  const plantMats = [MAT.crystal, MAT.bioGlow, MAT.cyanGlow];
+  const plants = [];
+  for (let i = 0; i < 8; i++) {
+    const p = new THREE.Mesh(new THREE.ConeGeometry(rand(0.2, 0.4), rand(0.6, 1.5), 5), pick(plantMats));
+    p.position.set(rand(-2, 2), 0.7 + 0.4, rand(-2, 2));
+    g.add(p); plants.push(p);
+  }
+  envAnims.push((dt, t) => {
+    plants.forEach((p, i) => p.scale.y = 1 + Math.sin(t * 1.5 + i) * 0.08);
+  });
+  registerStructure(g, 85, 14, 7, 7, 4);
+})();
+
+/* ---- landing pad: hexagonal platform with blinking edge lights ---- */
+(function landingPad() {
+  const g = new THREE.Group();
+  const pad = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 5.0, 0.6, 6), MAT.grayMid);
+  pad.position.y = 0.3; g.add(pad);
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.2, 0.65, 6), MAT.grayDark);
+  ring.position.y = 0.31; g.add(ring);
+  const hMark = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.05, 0.5), MAT.yellow);
+  hMark.position.y = 0.64; g.add(hMark);
+  const lights = [];
+  for (let i = 0; i < 6; i++) {
+    const l = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 0), MAT.cyanGlow.clone());
+    const a = i * Math.PI / 3 + Math.PI / 6;
+    l.position.set(Math.cos(a) * 4.3, 0.75, Math.sin(a) * 4.3);
+    g.add(l); lights.push(l);
+  }
+  envAnims.push((dt, t) => {
+    lights.forEach((l, i) => l.material.emissiveIntensity = 1 + Math.sin(t * 3 + i * 1.05) * 0.9);
+  });
+  const x = -40, z = 74;
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  addPlatform(x, z, 8.4, 8.4, terrainHeight(x, z) + 0.62);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; cameraBlockers.push(o); } });
+})();
+
+/* ---- storage huts + a ruined shack ---- */
+function storageHut(x, z, ry, colMat) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.2, 2.6), colMat);
+  body.position.y = 1.1; g.add(body);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(3.7, 0.35, 2.9), MAT.grayDark);
+  roof.position.y = 2.35; g.add(roof);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.5, 0.15), MAT.grayLight);
+  door.position.set(0.6, 0.85, 1.34); g.add(door);
+  const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.14), MAT.windowGlow);
+  lamp.position.set(-0.8, 1.9, 1.36); g.add(lamp);
+  g.rotation.y = ry;
+  registerStructure(g, x, z, 3.8, 3.2, 3);
+}
+storageHut(14, 20, 0.5, MAT.mustard);
+storageHut(38, 36, -0.8, MAT.orange);
+(function ruinedShack() {
+  const g = new THREE.Group();
+  const wall1 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.8, 0.3), MAT.wood);
+  wall1.position.set(0, 0.9, -1.4); wall1.rotation.z = 0.06; g.add(wall1);
+  const wall2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.4, 2.8), MAT.wood);
+  wall2.position.set(-1.7, 0.7, 0); wall2.rotation.x = -0.08; g.add(wall2);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(4, 0.2, 3.2), MAT.grayDark);
+  roof.position.set(0.4, 1.9, 0); roof.rotation.z = -0.3; roof.rotation.x = 0.1; g.add(roof);
+  for (let i = 0; i < 4; i++) {
+    const deb = new THREE.Mesh(new THREE.BoxGeometry(rand(0.4, 1), 0.15, rand(0.3, 0.6)), MAT.wood);
+    deb.position.set(rand(-2, 2.5), 0.1, rand(-1.5, 2));
+    deb.rotation.y = rand(0, Math.PI); g.add(deb);
+  }
+  registerStructure(g, 110, -88, 4, 3.4, 2.4);
+})();
+
+/* ---- UI hover ticks (delegated so dynamic buttons count too) ---- */
+document.addEventListener('mouseover', e => {
+  if (e.target.closest && e.target.closest('.vbtn, .small-btn, .qbtn, .locbtn, .mbtn, .upg button'))
+    SFX.hover();
+});
+
 /* ====================== PLAYER CHARACTER =========================== */
 // Also used for remote co-op players (each gets a different suit color)
 function buildPlayerMesh(suitColor = PAL.teal, trimColor = PAL.orange) {
@@ -1204,17 +1484,24 @@ function updatePlayer(dt) {
   player.pos.z = clamp(player.pos.z, -B, B);
 
   const groundY = groundYAt(player.pos.x, player.pos.z, player.pos.y);
+  const fallSpeed = player.velY;
   player.velY -= GRAVITY * dt;
   player.pos.y += player.velY * dt;
-  if (player.pos.y <= groundY) { player.pos.y = groundY; player.velY = 0; player.grounded = true; }
-  else player.grounded = false;
+  if (player.pos.y <= groundY) {
+    if (!player.grounded && fallSpeed < -5) SFX.land();
+    player.pos.y = groundY; player.velY = 0; player.grounded = true;
+  } else player.grounded = false;
   if (keys['Space'] && player.grounded) { player.velY = JUMP_VEL; player.grounded = false; SFX.jump(); }
 
   const m = player.mesh;
   m.group.position.copy(player.pos);
   m.group.rotation.y = player.yaw;
 
+  const prevStep = Math.floor(player.walkPhase / Math.PI);
   player.walkPhase += dt * speed * 1.35 * player.moveAmount;
+  // footstep on each stride while grounded
+  if (player.grounded && player.moveAmount > 0.3 &&
+      Math.floor(player.walkPhase / Math.PI) !== prevStep) SFX.step();
   const s = Math.sin(player.walkPhase), amp = 0.55 * Math.min(player.moveAmount, 1.2);
   m.legL.rotation.x = s * amp;
   m.legR.rotation.x = -s * amp;
@@ -1737,7 +2024,29 @@ const LORE = {
   blob: 'Pufflet — communicates by bouncing. Nobody knows what it says.',
   butterfly: 'Glasswing Flit — drawn to gunfire vibrations, oddly enough.',
   bird: 'Sky Skimmer — nests on the old tower. Unbothered by drones.',
+  strider: 'Dune Strider — a gentle stilt-legged grazer. Hums when calm.',
 };
+function makeStrider() {
+  const g = new THREE.Group();
+  const col = mat(pick([PAL.blue, PAL.teal, PAL.mustard]));
+  const dark = mat(PAL.grayDark);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 1.5), col);
+  body.position.y = 1.7; body.castShadow = true; g.add(body);
+  const legs = [];
+  for (const [lx, lz] of [[-0.3, 0.55], [0.3, 0.55], [-0.3, -0.55], [0.3, -0.55]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.5, 0.12), dark);
+    leg.position.set(lx, 0.75, lz); g.add(leg); legs.push(leg);
+  }
+  const neck = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.8, 0.2), col);
+  neck.position.set(0, 2.35, 0.7); neck.rotation.x = 0.4; g.add(neck);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.3, 0.55), col);
+  head.position.set(0, 2.75, 0.95); g.add(head);
+  for (const s of [-1, 1]) {
+    const e = new THREE.Mesh(eyeGeo, eyeMat); e.scale.setScalar(0.7);
+    e.position.set(s * 0.14, 2.8, 1.2); g.add(e);
+  }
+  return { g, species: 'strider', speed: 1.1, legs };
+}
 function makeTurtle(x, z) {
   const g = new THREE.Group();
   const shell = new THREE.Mesh(new THREE.SphereGeometry(0.55, 6, 4), mat(pick([PAL.teal, PAL.blue])));
@@ -1793,7 +2102,7 @@ function makeBird() {
   return { g, species: 'bird', speed: 6, fly: true, wings: [w1, w2] };
 }
 function spawnWildlife() {
-  const makers = [[makeTurtle, 6], [makeSlug, 6], [makeBlob, 8]];
+  const makers = [[makeTurtle, 8], [makeSlug, 8], [makeBlob, 10], [makeStrider, 6]];
   for (const [mk, n] of makers)
     for (let i = 0; i < n; i++) {
       const x = rand(-100, 100), z = rand(-100, 100);
@@ -1801,9 +2110,10 @@ function spawnWildlife() {
       c.g.position.set(x, terrainHeight(x, z), z);
       scene.add(c.g);
       wildlife.push({ mesh: c.g, species: c.species, speed: c.speed, hops: !!c.hops,
+        legs: c.legs || null,
         fly: false, dir: rand(0, Math.PI * 2), t: rand(0, 4), hop: 0, scanned: false, wings: null });
     }
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 14; i++) {
     const c = makeButterfly();
     const x = rand(-90, 90), z = rand(-90, 90);
     c.g.position.set(x, terrainHeight(x, z) + rand(1, 2.5), z);
@@ -1811,7 +2121,7 @@ function spawnWildlife() {
     wildlife.push({ mesh: c.g, species: 'butterfly', speed: c.speed, fly: true, wings: c.wings,
       dir: rand(0, Math.PI * 2), t: rand(0, 4), baseY: rand(1.2, 2.6), scanned: false });
   }
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     const c = makeBird();
     const cx = pick([-40, 30]), cz = pick([-60, 40]);
     scene.add(c.g);
@@ -1819,7 +2129,16 @@ function spawnWildlife() {
       cx, cz, rad: rand(18, 34), ang: rand(0, Math.PI * 2), h: rand(12, 22), scanned: false, t: 0 });
   }
 }
+let chirpT = 3;
 function updateWildlife(dt) {
+  // ambient chirps from creatures near the player
+  chirpT -= dt;
+  if (chirpT <= 0) {
+    chirpT = rand(2.5, 7);
+    for (const c of wildlife) {
+      if (!c.fly && c.mesh.position.distanceTo(player.pos) < 15) { SFX.chirp(); break; }
+    }
+  }
   for (const c of wildlife) {
     const m = c.mesh;
     c.t += dt;
@@ -1856,6 +2175,12 @@ function updateWildlife(dt) {
       }
       m.position.y = terrainHeight(m.position.x, m.position.z) +
         (c.hops ? Math.sin(Math.max(c.hop, 0) * Math.PI) * 0.5 : 0);
+      // stilt-legged striders swing their legs while moving
+      if (c.legs) {
+        const sw = Math.sin(c.t * 5) * 0.35;
+        c.legs[0].rotation.x = sw; c.legs[3].rotation.x = sw;
+        c.legs[1].rotation.x = -sw; c.legs[2].rotation.x = -sw;
+      }
     }
   }
 }
@@ -2745,6 +3070,7 @@ function animate() {
   const holo = bridgeMarker.getObjectByName('holo');
   if (holo) { holo.rotation.y += dt * 2; holo.position.y = 3.4 + Math.sin(wallT * 2) * 0.2; }
   ambientPts.rotation.y += dt * 0.004;
+  updateEnvAnims(dt);   // radar dish, pad lights, greenhouse plants…
 
   if (game.state === 'playing') {
     game.time += dt;
