@@ -958,7 +958,7 @@ function clearOfSites(x, z, roadMin = 3) {
 
 /* ---- tall stalk trees (splash-art style: blob canopy on thin trunk) */
 (function stalkForest() {
-  const N = 220;
+  const N = 300;
   const trunkGeo2 = new THREE.CylinderGeometry(0.09, 0.14, 1, 4);
   const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
   const trunkInst = new THREE.InstancedMesh(trunkGeo2, MAT.trunk, N);
@@ -1060,12 +1060,12 @@ function clearOfSites(x, z, roadMin = 3) {
 (function moreNature() {
   const half = WORLD_SIZE / 2 - 8;
   let placed = 0, guard = 0;
-  while (placed < 70 && guard++ < 900) {
+  while (placed < 100 && guard++ < 1300) {
     const x = rand(-half, half), z = rand(-half, half);
     if (!clearOfSites(x, z, 4)) continue;
     makeTree(x, z, rand(0.8, 1.7)); placed++;
   }
-  for (let i = 0; i < 65; i++) {
+  for (let i = 0; i < 80; i++) {
     const x = rand(-half, half), z = rand(-half, half);
     if (!clearOfSites(x, z, 3)) continue;
     makeRock(x, z, rand(0.4, 2.2));
@@ -1523,6 +1523,352 @@ envAnims.push(dt => {
   gustT -= dt;
   if (gustT <= 0) { gustT = rand(9, 18); SFX.gust(); }
 });
+
+/* =====================================================================
+   SETTLEMENTS PASS — friendly settler village with NPC villagers,
+   hostile raider camp (boss lair), windmill, campfires, crop fields,
+   wells, fences, ruins and spire-tree groves.
+   ===================================================================== */
+const VILLAGE_POS = { x: 105, z: 92 };     // friendly settlers
+const RAIDER_CAMP = { x: -120, z: -80 };   // warlord's fortified camp
+
+/* ---- building blocks ---- */
+function makeHutRound(x, z, ry, wallMat, roofMat) {
+  const g = new THREE.Group();
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 2.2, 2.2, 7), wallMat);
+  wall.position.y = 1.1; wall.castShadow = wall.receiveShadow = true; g.add(wall);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(2.7, 1.8, 7), roofMat);
+  roof.position.y = 3.1; roof.castShadow = true; g.add(roof);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.5, 0.18), MAT.grayDark);
+  door.position.set(0, 0.78, 2.05); g.add(door);
+  const win = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.45, 0.16), MAT.windowGlow);
+  win.position.set(1.3, 1.4, 1.5); win.rotation.y = 0.6; g.add(win);
+  g.rotation.y = ry;
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  addBoxCollider(x, z, 4.2, 4.2, 3.4);
+  g.traverse(o => { if (o.isMesh) { cameraBlockers.push(o); losBlockers.push(o); } });
+  return g;
+}
+function makeHutTall(x, z, ry, wallMat) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.6, 2.4), wallMat);
+  body.position.y = 1.8; body.castShadow = body.receiveShadow = true; g.add(body);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(2.3, 1.4, 4), MAT.grayDark);
+  roof.position.y = 4.3; roof.rotation.y = Math.PI / 4; roof.castShadow = true; g.add(roof);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.5, 0.16), MAT.grayDark);
+  door.position.set(0.4, 0.78, 1.22); g.add(door);
+  for (const wy of [1.6, 2.9]) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.5, 0.14), MAT.windowGlow);
+    win.position.set(-0.6, wy, 1.24); g.add(win);
+  }
+  const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.1, 0.4), MAT.grayMid);
+  chimney.position.set(0.8, 4.4, -0.5); g.add(chimney);
+  g.rotation.y = ry;
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  addBoxCollider(x, z, 3, 2.8, 4.6);
+  g.traverse(o => { if (o.isMesh) { cameraBlockers.push(o); losBlockers.push(o); } });
+  return g;
+}
+function makeFenceRun(x1, z1, x2, z2) {
+  const len = Math.hypot(x2 - x1, z2 - z1), n = Math.max(2, Math.round(len / 2.2));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, x = x1 + (x2 - x1) * t, z = z1 + (z2 - z1) * t;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.0, 0.16), MAT.wood);
+    post.position.set(x, terrainHeight(x, z) + 0.5, z);
+    scene.add(post);
+    if (i < n) {
+      const nx = x1 + (x2 - x1) * (i + 1) / n, nz = z1 + (z2 - z1) * (i + 1) / n;
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, len / n), MAT.wood);
+      rail.position.set((x + nx) / 2, terrainHeight((x + nx) / 2, (z + nz) / 2) + 0.75, (z + nz) / 2);
+      rail.lookAt(nx, terrainHeight(nx, nz) + 0.75, nz);
+      scene.add(rail);
+    }
+  }
+}
+function makeCampfire(x, z) {
+  const g = new THREE.Group();
+  for (let i = 0; i < 6; i++) {
+    const a = i * Math.PI / 3;
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.24, 0), MAT.rock);
+    stone.position.set(Math.cos(a) * 0.7, 0.12, Math.sin(a) * 0.7); g.add(stone);
+  }
+  for (let i = 0; i < 3; i++) {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.0, 5), MAT.wood);
+    log.rotation.z = Math.PI / 2; log.rotation.y = i * Math.PI / 3;
+    log.position.y = 0.15; g.add(log);
+  }
+  const flames = [];
+  for (let i = 0; i < 3; i++) {
+    const f = new THREE.Mesh(new THREE.ConeGeometry(0.22 - i * 0.05, 0.7 - i * 0.12, 5),
+      mat(0xffa03c, { emissive: [0xff8a3c, 0xffc84a, 0xff5f3c][i], emissiveIntensity: 1.6 }));
+    f.position.set(rand(-0.1, 0.1), 0.45 + i * 0.16, rand(-0.1, 0.1));
+    g.add(f); flames.push(f);
+  }
+  const light = new THREE.PointLight(0xff9a4c, 1.1, 11);
+  light.position.y = 1; g.add(light);
+  envAnims.push((dt, t) => {
+    flames.forEach((f, i) => {
+      f.scale.y = 1 + Math.sin(t * (7 + i * 2) + i) * 0.22;
+      f.rotation.y += dt * (2 + i);
+    });
+    light.intensity = 1.0 + Math.sin(t * 9.3) * 0.25 + Math.sin(t * 23.7) * 0.12;
+  });
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  return g;
+}
+function makeWell(x, z) {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.0, 0.8, 8), MAT.rock);
+  ring.position.y = 0.4; g.add(ring);
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.1, 8), waterMat);
+  water.position.y = 0.62; g.add(water);
+  for (const sd of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.6, 0.14), MAT.wood);
+    post.position.set(sd * 0.85, 1.2, 0); g.add(post);
+  }
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.14, 0.14), MAT.wood);
+  beam.position.y = 2.0; g.add(beam);
+  const roofW = new THREE.Mesh(new THREE.ConeGeometry(1.5, 0.7, 4), MAT.grayDark);
+  roofW.position.y = 2.5; roofW.rotation.y = Math.PI / 4; g.add(roofW);
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  circleColliders.push({ x, z, r: 1.1 });
+  return g;
+}
+function makeWindmill(x, z) {
+  const g = new THREE.Group();
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.7, 7, 6), mat(0xcfc4b0));
+  tower.position.y = 3.5; tower.castShadow = true; g.add(tower);
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.1, 6), MAT.grayDark);
+  cap.position.y = 7.5; g.add(cap);
+  const hub = new THREE.Group();
+  hub.position.set(0, 7.1, 1.15);
+  for (let i = 0; i < 4; i++) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.5, 3.4, 0.08), mat(PAL.mustard));
+    blade.position.y = 1.8;
+    const arm = new THREE.Group();
+    arm.add(blade);
+    arm.rotation.z = i * Math.PI / 2;
+    hub.add(arm);
+  }
+  g.add(hub);
+  envAnims.push(dt => { hub.rotation.z += dt * 0.9; });
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  circleColliders.push({ x, z, r: 1.8 });
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; cameraBlockers.push(o); } });
+  return g;
+}
+function makeCropField(x, z, rows, cols) {
+  const N = rows * cols;
+  const inst = new THREE.InstancedMesh(new THREE.ConeGeometry(0.16, 0.7, 4),
+    makeGrassMaterial(0x6fae4a), N);   // crops sway in the wind too
+  const dummy = new THREE.Object3D();
+  let i = 0;
+  for (let r = 0; r < rows; r++)
+    for (let c2 = 0; c2 < cols; c2++) {
+      const px = x + (c2 - cols / 2) * 0.9 + rand(-0.12, 0.12);
+      const pz = z + (r - rows / 2) * 1.2 + rand(-0.12, 0.12);
+      dummy.position.set(px, terrainHeight(px, pz) + 0.32, pz);
+      dummy.scale.setScalar(rand(0.7, 1.15));
+      dummy.rotation.y = rand(0, Math.PI);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i++, dummy.matrix);
+    }
+  scene.add(inst);
+}
+function makeRuin(x, z) {
+  for (let i = 0; i < randI(3, 5); i++) {
+    const w = new THREE.Mesh(new THREE.BoxGeometry(rand(1.5, 3.2), rand(0.6, 2.0), 0.5), MAT.rock);
+    w.position.set(x + rand(-4, 4), 0, z + rand(-4, 4));
+    w.position.y = terrainHeight(w.position.x, w.position.z) + w.geometry.parameters.height / 2;
+    w.rotation.y = rand(0, Math.PI);
+    w.rotation.z = rand(-0.12, 0.12);
+    w.castShadow = w.receiveShadow = true;
+    scene.add(w);
+    cameraBlockers.push(w); losBlockers.push(w);
+  }
+}
+
+/* ---- spire-tree groves (tall stacked-cone pines, instanced) ---- */
+(function spireGroves() {
+  const N = 90;
+  const trunkI = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.2, 1, 5), MAT.trunk, N);
+  const spireI = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 6), mat(0xffffff), N);
+  const cols = [0x2f8f7a, 0x3fae74, 0x3fbfae, 0xd9a53a].map(c => new THREE.Color(c));
+  const dummy = new THREE.Object3D();
+  let i = 0, guard = 0;
+  while (i < N && guard++ < 1200) {
+    const x = rand(-132, 132), z = rand(-132, 132);
+    if (!clearOfSites(x, z, 4)) continue;
+    if (Math.hypot(x - VILLAGE_POS.x, z - VILLAGE_POS.z) < 16) continue;
+    if (Math.hypot(x - RAIDER_CAMP.x, z - RAIDER_CAMP.z) < 16) continue;
+    const gy = terrainHeight(x, z), h = rand(2.4, 4.2);
+    dummy.position.set(x, gy + h / 2, z);
+    dummy.scale.set(1, h, 1);
+    dummy.rotation.set(0, 0, 0);
+    dummy.updateMatrix(); trunkI.setMatrixAt(i, dummy.matrix);
+    const sh = rand(3.2, 5.4);
+    dummy.position.set(x, gy + h + sh / 2 - 0.4, z);
+    dummy.scale.set(rand(1.1, 1.7), sh, rand(1.1, 1.7));
+    dummy.updateMatrix(); spireI.setMatrixAt(i, dummy.matrix);
+    spireI.setColorAt(i, pick(cols));
+    circleColliders.push({ x, z, r: 0.35 });
+    i++;
+  }
+  trunkI.count = i; spireI.count = i;
+  if (spireI.instanceColor) spireI.instanceColor.needsUpdate = true;
+  spireI.castShadow = true;
+  scene.add(trunkI); scene.add(spireI);
+})();
+
+/* ---- SETTLER VILLAGE (friendly) ---- */
+(function settlerVillage() {
+  const vx = VILLAGE_POS.x, vz = VILLAGE_POS.z;
+  makeHutRound(vx - 6, vz - 4, 0.4, mat(0xd8c8a8), mat(PAL.orange));
+  makeHutRound(vx + 6, vz - 5, -0.7, mat(0xcfc4b0), mat(PAL.teal));
+  makeHutTall(vx - 7, vz + 5, 0.9, mat(0xb89a78));
+  makeHutTall(vx + 7, vz + 4, -0.5, mat(0xa88a68));
+  makeHutRound(vx, vz + 9, 0, mat(0xd8c8a8), mat(PAL.pink));
+  makeCampfire(vx, vz);
+  makeWell(vx - 2, vz - 8);
+  makeWindmill(vx + 13, vz - 2);
+  makeCropField(vx - 14, vz - 1, 6, 5);
+  makeFenceRun(vx - 17, vz - 5, vx - 17, vz + 4);
+  makeFenceRun(vx - 17, vz + 4, vx - 11, vz + 8);
+  // market stall
+  const stall = new THREE.Group();
+  const counter = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.0), MAT.wood);
+  counter.position.y = 0.45; stall.add(counter);
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.12, 1.6), mat(PAL.magenta));
+  canopy.position.y = 2.1; canopy.rotation.x = 0.15; stall.add(canopy);
+  for (const sd of [-1, 1]) {
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.1, 0.1), MAT.wood);
+    p.position.set(sd * 1.15, 1.05, 0.6); stall.add(p);
+  }
+  for (let i = 0; i < 3; i++) {
+    const fruit = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), mat(pick([PAL.pink, PAL.yellow, PAL.teal])));
+    fruit.position.set(-0.6 + i * 0.6, 1.0, 0); stall.add(fruit);
+  }
+  stall.position.set(vx + 3, terrainHeight(vx + 3, vz + 7), vz + 7);
+  stall.rotation.y = -0.4;
+  scene.add(stall);
+  addBoxCollider(vx + 3, vz + 7, 2.4, 1.4, 2.4);
+})();
+
+/* ---- NPC villagers (spawned from startGame — rig needs runtime init) */
+const npcs = [];
+const NPC_DEFS = [
+  { name: 'Maru', suit: 0xe8b93c, trim: 0x3fbfae, lines: [
+    '“Welcome to Duskwell! Mind the drones past the fence.”',
+    '“The windmill squeaks louder before a dust storm. Every time.”',
+    '“Trade? Ha! Take what you need — just keep the raiders away.”'] },
+  { name: 'Petta', suit: 0xe86a9e, trim: 0xe8b93c, lines: [
+    '“I saw a shard glinting near the old arches once. Never dared.”',
+    '“The pufflets dig up metal. Smartest pets on this rock.”',
+    '“Careful by the canal at night — snipers nest on the ridge.”'] },
+  { name: 'Old Renn', suit: 0x9aa3ad, trim: 0xd94f8a, lines: [
+    '“The Warlord took our western fields. Someone ought to end that.”',
+    '“That observatory? Older than the colony. Older than the maps.”',
+    '“HELAO2 protocol, kid: when all else fails, build.”'] },
+];
+function spawnVillagers() {
+  if (npcs.length) return;
+  NPC_DEFS.forEach((def, i) => {
+    const m = buildPlayerMesh(def.suit, def.trim);
+    m.gunMeshes.forEach(g => g.visible = false);   // civilians
+    const a = i * Math.PI * 2 / 3;
+    const x = VILLAGE_POS.x + Math.cos(a) * 4, z = VILLAGE_POS.z + Math.sin(a) * 4;
+    m.group.position.set(x, terrainHeight(x, z), z);
+    scene.add(m.group);
+    npcs.push({ mesh: m, def, lineIdx: 0, dir: rand(0, Math.PI * 2), t: rand(0, 4), phase: rand(0, 5) });
+  });
+}
+function updateNPCs(dt) {
+  for (const n of npcs) {
+    n.t += dt;
+    n.phase += dt;
+    const g = n.mesh.group;
+    const toP = g.position.distanceTo(player.pos);
+    if (toP < 5) {
+      // face the visitor
+      g.rotation.y = Math.atan2(player.pos.x - g.position.x, player.pos.z - g.position.z);
+      n.mesh.legL.rotation.x = 0; n.mesh.legR.rotation.x = 0;
+      n.mesh.armL.rotation.x = Math.sin(n.phase * 1.4) * 0.06;
+    } else {
+      if (n.t > 4) {
+        n.t = 0;
+        n.dir = Math.atan2(VILLAGE_POS.x - g.position.x, VILLAGE_POS.z - g.position.z) + rand(-1.6, 1.6);
+      }
+      g.position.x += Math.sin(n.dir) * dt * 1.1;
+      g.position.z += Math.cos(n.dir) * dt * 1.1;
+      g.rotation.y = n.dir;
+      const s = Math.sin(n.phase * 5), amp = 0.3;
+      n.mesh.legL.rotation.x = s * amp;
+      n.mesh.legR.rotation.x = -s * amp;
+      n.mesh.kneeL.rotation.x = Math.max(0, -s) * amp;
+      n.mesh.kneeR.rotation.x = Math.max(0, s) * amp;
+      n.mesh.armL.rotation.x = -s * amp;
+      n.mesh.armR.rotation.x = s * amp;
+    }
+    g.position.y = terrainHeight(g.position.x, g.position.z);
+  }
+}
+
+/* ---- RAIDER CAMP (hostile, boss lair) ---- */
+const raiderCrateMesh = (function raiderCamp() {
+  const cx = RAIDER_CAMP.x, cz = RAIDER_CAMP.z;
+  const darkWall = mat(0x4a4048), darkRoof = mat(0x322a36);
+  makeHutRound(cx - 6, cz - 4, 0.7, darkWall, darkRoof);
+  makeHutTall(cx + 6, cz - 5, -0.4, darkWall);
+  makeHutRound(cx + 5, cz + 6, 1.4, darkWall, darkRoof);
+  makeCampfire(cx, cz + 1);
+  // spiked barricades around the perimeter
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2;
+    if (Math.abs(a - Math.PI / 2) < 0.5) continue;   // gap = entrance
+    const sx = cx + Math.cos(a) * 12, sz = cz + Math.sin(a) * 12;
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.3, rand(1.4, 2.0), 5), mat(0x2f2a36));
+    spike.position.set(sx, terrainHeight(sx, sz) + 0.7, sz);
+    spike.rotation.set(rand(-0.4, 0.4), 0, rand(-0.4, 0.4));
+    spike.castShadow = true;
+    scene.add(spike);
+    circleColliders.push({ x: sx, z: sz, r: 0.5 });
+  }
+  // watch platform
+  const post = new THREE.Group();
+  for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 4, 0.3), mat(0x2f2a36));
+    leg.position.set(lx, 2, lz); post.add(leg);
+  }
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.3, 2.8), darkWall);
+  deck.position.y = 4.1; post.add(deck);
+  const banner = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.6, 1.0), mat(PAL.magenta));
+  banner.position.set(0, 5.1, 0); post.add(banner);
+  post.position.set(cx - 9, terrainHeight(cx - 9, cz + 7), cz + 7);
+  scene.add(post);
+  addBoxCollider(cx - 9, cz + 7, 2.6, 2.6, 4.6);
+  post.traverse(o => { if (o.isMesh) { o.castShadow = true; cameraBlockers.push(o); losBlockers.push(o); } });
+  // war chest (lootable once the Warlord falls)
+  const crate = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.3, 1.2), mat(0x5a4048));
+  box.position.y = 0.65; box.castShadow = true; crate.add(box);
+  const trimB = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.2, 1.3), mat(PAL.magenta));
+  trimB.position.y = 1.3; crate.add(trimB);
+  const glow = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.1, 1.25), MAT.coreGlow);
+  glow.position.y = 1.15; crate.add(glow);
+  crate.position.set(cx, terrainHeight(cx, cz - 5), cz - 5);
+  scene.add(crate);
+  return crate;
+})();
+
+/* ---- scattered ruins in the wilds ---- */
+makeRuin(-40, -110);
+makeRuin(70, 120);
+makeRuin(-130, 60);
 
 /* ==================== WEAPON MODELS ================================ */
 // Shared by the third-person rig, the first-person viewmodel, and
@@ -2273,7 +2619,27 @@ const ETYPES = {
   wasp:     { hp: 40,  speed: 6.0, detectR: 28, attackR: 16, dmg: 8,  fireA: 1.1, fireB: 1.6, ranged: true, fly: true, drop: [2, 3] },
   sniper:   { hp: 50,  speed: 2.8, detectR: 46, attackR: 44, dmg: 26, ranged: true, sniper: true, drop: [4, 3] },
   exploder: { hp: 25,  speed: 7.4, detectR: 32, attackR: 2.4, dmg: 26, ranged: false, exploder: true, drop: [2, 2] },
+  raider:   { hp: 85,  speed: 4.2, detectR: 30, attackR: 22, dmg: 11, fireA: 0.9, fireB: 1.5, ranged: true, drop: [4, 3] },
+  warlord:  { hp: 450, speed: 3.0, detectR: 34, attackR: 24, dmg: 18, fireA: 1.4, fireB: 1.9, ranged: true, boss: true, drop: [20, 14] },
 };
+/* ---- human-like raiders: reuse the full player rig with hostile colors */
+function buildRaiderMesh(boss) {
+  const m = buildPlayerMesh(boss ? 0x2a2530 : 0x4a4552, boss ? 0xff5f7a : 0xd94f8a);
+  m.gunMeshes.forEach((g, k) => g.visible = k === (boss ? 3 : 1));   // rifle / lance
+  if (boss) {
+    m.group.scale.setScalar(1.35);
+    for (const sd of [-1, 1]) {   // shoulder spikes
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.55, 5), mat(0x241f2e));
+      spike.position.set(sd * 0.62, 2.05, 0); spike.rotation.z = -sd * 0.5;
+      m.group.add(spike);
+    }
+    const crown = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.35, 4), MAT.redGlow);
+    crown.position.y = 2.62; m.group.add(crown);
+  }
+  const bodyMat = m.group.children[0].material;   // torso suit material (flash target)
+  return { group: m.group, bodyMat, legs: [m.legL, m.legR], armL: m.armL, armR: m.armR,
+           knees: [m.kneeL, m.kneeR], humanoid: true };
+}
 function buildStalkerMesh(scale = 1, heavy = false) {
   const g = new THREE.Group();
   const bodyMat = mat(heavy ? 0x4a3f52 : PAL.grayMid);
@@ -2378,6 +2744,8 @@ function spawnEnemy(type, x, z) {
     : type === 'scout' ? buildScoutMesh()
     : type === 'sniper' ? buildSniperMesh()
     : type === 'exploder' ? buildExploderMesh()
+    : type === 'raider' ? buildRaiderMesh(false)
+    : type === 'warlord' ? buildRaiderMesh(true)
     : buildStalkerMesh(type === 'heavy' ? 1.45 : 1, type === 'heavy');
   const e = {
     type, T, alive: true, mesh: built.group, parts: built,
@@ -2404,6 +2772,11 @@ function spawnEnemy(type, x, z) {
 function onAlert(e) {
   alertNearby(e);
   if (!e.alerted) { e.alerted = true; SFX.alert(); }
+  if (e.type === 'warlord' && !e.warned) {
+    e.warned = true;
+    showMessage('⚠ THE WARLORD HAS MARKED YOU ⚠');
+    SFX.powerup();
+  }
   if (e.type === 'scout' && !e.calledBackup) {
     e.calledBackup = true;
     callBackup(e, '⚠ A scout drone is calling for backup!');
@@ -2472,6 +2845,11 @@ function killEnemy(e) {
   scene.remove(e.mesh);
   SFX.explode();
   if (e.type === 'exploder') explodeAt(e.mesh.position.clone(), 3.5, 14);   // dies loudly
+  if (e.type === 'warlord') {
+    emit(e.mesh.position.clone().add(new THREE.Vector3(0, 1.5, 0)), 0xff5f7a, 22, 9, 1.1, 1.8);
+    slowmoT = 1.6;
+    missionProgress('warlord', 1);
+  }
   const p = e.mesh.position;
   emit(p, 0xff8a3c, 14, 7, 0.8, 1.4);
   emit(p, 0x3a4048, 10, 5, 1.1, 1.2);
@@ -2579,9 +2957,18 @@ function updateEnemies(dt) {
         e.fireCd -= dt;
         if (e.fireCd <= 0 && seesPlayer) {
           e.fireCd = rand(e.T.fireA, e.T.fireB);
-          const from = m.position.clone().add(new THREE.Vector3(0, e.T.fly ? -0.2 : 1.1, 0));
-          enemyShoot(from, pPos.clone().add(new THREE.Vector3(0, 1.3, 0)), 26, e.T.dmg);
-          SFX.turret();
+          const gunY = e.T.fly ? -0.2 : e.parts.humanoid ? 1.6 : 1.1;
+          const from = m.position.clone().add(new THREE.Vector3(0, gunY, 0));
+          const burst = e.T.boss ? 3 : 1;
+          for (let b = 0; b < burst; b++) {
+            if (b === 0) { enemyShoot(from, pPos.clone().add(new THREE.Vector3(0, 1.3, 0)), 26, e.T.dmg); SFX.turret(); }
+            else setTimeout(() => {
+              if (!e.alive || game.state !== 'playing') return;
+              enemyShoot(e.mesh.position.clone().add(new THREE.Vector3(0, gunY, 0)),
+                player.pos.clone().add(new THREE.Vector3(0, 1.3, 0)), 26, e.T.dmg);
+              SFX.turret();
+            }, b * 140);
+          }
         }
       } else {
         // scout: rush in, slash, dart away
@@ -2604,6 +2991,13 @@ function updateEnemies(dt) {
       m.position.y = terrainHeight(m.position.x, m.position.z);
       const walk = Math.sin(e.t * 8) * 0.3;
       if (e.parts.legs) { e.parts.legs[0].rotation.x = walk; e.parts.legs[1].rotation.x = -walk; }
+      if (e.parts.humanoid) {
+        e.parts.knees[0].rotation.x = Math.max(0, -walk) * 1.1;
+        e.parts.knees[1].rotation.x = Math.max(0, walk) * 1.1;
+        e.parts.armL.rotation.x = -walk * 0.9;
+        e.parts.armR.rotation.x = (e.state === 'attack' || e.state === 'chase')
+          ? -Math.PI / 2 + 0.1 : walk * 0.9;
+      }
       m.position.y += Math.abs(Math.sin(e.t * 8)) * 0.05;
       // exploders pulse red, faster as they close in
       if (e.T.exploder && e.flash <= 0) {
@@ -2653,7 +3047,7 @@ function spawnAmbientEnemy() {
   const hubDist = Math.hypot(x - CAMPER_POS.x, z - CAMPER_POS.z);
   const type = hubDist < 65
     ? pick(['stalker', 'stalker', 'wasp'])
-    : pick(['stalker', 'scout', 'scout', 'wasp', 'heavy', 'sniper', 'exploder']);
+    : pick(['stalker', 'scout', 'scout', 'wasp', 'heavy', 'sniper', 'exploder', 'raider']);
   spawnEnemy(type, x, z);
 }
 
@@ -3180,6 +3574,7 @@ const MISSIONS = [
   { id: 'survey', title: 'Wildlife Survey', desc: 'Scan 6 wild creatures with Q. Approach slowly — most of them flee.', target: 6 },
   { id: 'bridge', title: 'Western Crossing', desc: 'Bring 12 metal to the broken crossing on the western ravine and rebuild it (E at the marker).', target: 1 },
   { id: 'cache',  title: 'Hidden Cache', desc: 'Old logs mention a supply cache hidden in the far northern rocks.', target: 1 },
+  { id: 'warlord', title: 'The Warlord', desc: 'A raider warlord rules a fortified camp in the far west. The settlers of Duskwell want their fields back.', target: 1 },
 ];
 const missionState = {};
 MISSIONS.forEach(m => missionState[m.id] = { progress: 0, done: false, locked: !!m.locked });
@@ -3210,6 +3605,10 @@ function completeMission(id) {
   else if (id === 'survey') { player.res.cores += 2; player.res.b += 10; spawnCompanion(true); }
   else if (id === 'bridge') { player.res.cores += 2; player.res.m += 15; }
   else if (id === 'cache')  { unlockWeapon(2); player.res.cores += 2; }
+  else if (id === 'warlord') {
+    player.res.cores += 3; player.res.m += 25; player.res.e += 15;
+    setTimeout(() => showToast('Duskwell is free — loot the war chest at the camp (E)'), 2600);
+  }
   updateCountersUI(); updateMissionTracker();
   saveGame(true);
 }
@@ -3315,7 +3714,7 @@ function updatePickups(dt) {
 }
 
 /* ==================== INTERACTION (E) ============================== */
-let cacheFound = false, bridgeBuilt = false;
+let cacheFound = false, bridgeBuilt = false, raiderLootFound = false;
 function interactTarget() {
   if (player.pos.distanceTo(new THREE.Vector3(CAMPER_POS.x, player.pos.y, CAMPER_POS.z)) < 9)
     return { kind: 'camper', label: 'Press <b>E</b> to resupply at the outpost camper' };
@@ -3327,6 +3726,12 @@ function interactTarget() {
     return { kind: 'bridge', label: 'Press <b>E</b> to rebuild the crossing (needs 12 metal)' };
   if (!cacheFound && player.pos.distanceTo(new THREE.Vector3(CACHE_POS.x, player.pos.y, CACHE_POS.z)) < 6)
     return { kind: 'cache', label: 'Press <b>E</b> to open the hidden cache' };
+  for (const n of npcs)
+    if (n.mesh.group.position.distanceTo(player.pos) < 3.5)
+      return { kind: 'npc', n, label: 'Press <b>E</b> to talk to ' + n.def.name };
+  if (!raiderLootFound && missionState.warlord.done &&
+      player.pos.distanceTo(raiderCrateMesh.position) < 5)
+    return { kind: 'rloot', label: 'Press <b>E</b> to loot the war chest' };
   return null;
 }
 function updateInteract() {
@@ -3383,6 +3788,21 @@ function tryInteract() {
     SFX.place(); SFX.unlock();
     missionProgress('bridge', 1);
     updateCountersUI();
+  } else if (t.kind === 'npc') {
+    const n = t.n;
+    showMessage(n.def.name + ': ' + n.def.lines[n.lineIdx % n.def.lines.length]);
+    n.lineIdx++;
+    SFX.click();
+  } else if (t.kind === 'rloot') {
+    raiderLootFound = true;
+    SFX.core();
+    player.res.m += 25; player.res.e += 20; player.res.b += 12; player.res.cores += 1;
+    inventory.medkit += 2; inventory.ammopack += 2;
+    emit(raiderCrateMesh.position.clone().add(new THREE.Vector3(0, 1, 0)), 0xffd166, 18, 5, 1, 1.2, 0.2);
+    addLore('War chest — stolen settler goods, drone parts, and a data core wrapped in cloth.');
+    showMessage('The war chest is yours — Duskwell will remember this.');
+    updateCountersUI();
+    saveGame(true);
   } else if (t.kind === 'cache') {
     cacheFound = true;
     SFX.core();
@@ -3407,7 +3827,7 @@ function saveGame(silent) {
       [b.type, +b.mesh.position.x.toFixed(2), +b.mesh.position.z.toFixed(2), +b.mesh.rotation.y.toFixed(3), Math.round(b.hp)]),
     secretsFound, lore: loreEntries,
     pylons: pylons.map(p => p.active),
-    bridgeBuilt, cacheFound,
+    bridgeBuilt, cacheFound, raiderLootFound,
     clock: Math.round(dayClock), inv: inventory, companion: hasCompanion,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) {}
@@ -3448,6 +3868,7 @@ function loadGame() {
     if (holo) bridgeMarker.remove(holo);
   }
   cacheFound = !!d.cacheFound;
+  raiderLootFound = !!d.raiderLootFound;
   dayClock = d.clock != null ? d.clock : 55;
   Object.assign(inventory, d.inv || {});
   if (d.companion) spawnCompanion(false);
@@ -3580,6 +4001,8 @@ const TIPS = [
   'TIP: Press <b>P</b> for Photo Mode — F saves a screenshot of the Wilds.',
   'TIP: Craft medkits and ammo packs (I) — half price at the camper bench.',
   'TIP: Watch the sky: supply pods and drone patrols come and go.',
+  'TIP: The settlers of Duskwell village (southeast) have stories to tell.',
+  'TIP: The Warlord\'s camp lies far west. Bring a big gun and a plan.',
 ];
 let tipIdx = 0;
 setInterval(() => {
@@ -3614,7 +4037,20 @@ function startGame(fromSave) {
     // wilder spawns farther out
     [[90, -40, 'scout'], [-100, -60, 'exploder'], [100, 90, 'heavy'],
      [-90, 90, 'sniper'], [60, -110, 'wasp'], [0, 120, 'scout']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
+    // raider camp garrison — the Warlord holds court until his mission is done
+    const rc = RAIDER_CAMP;
+    if (!missionState.warlord.done) {
+      spawnEnemy('warlord', rc.x, rc.z - 3);
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2 + 0.4;
+        spawnEnemy('raider', rc.x + Math.cos(a) * 9, rc.z + Math.sin(a) * 9);
+      }
+    } else {
+      spawnEnemy('raider', rc.x + 8, rc.z + 8);   // stragglers
+      spawnEnemy('raider', rc.x - 8, rc.z - 8);
+    }
   }
+  spawnVillagers();
   showScreen('');
   $('hud').style.display = 'block';
   game.state = 'playing';
@@ -3753,6 +4189,7 @@ function animate() {
     netTick(dt);
     updateEvents(dt);
     updateCompanion(dt);
+    updateNPCs(dt);
     updateMinimap();
 
     sun.target.position.set(player.pos.x, 0, player.pos.z);
@@ -4120,6 +4557,7 @@ function missionTargetPos() {
     case 'survey': { const c = nearestUnscanned(); return c ? [c.mesh.position.x, c.mesh.position.z] : null; }
     case 'bridge': return [BRIDGE_SPOT.x, BRIDGE_SPOT.z];
     case 'cache': return [CACHE_POS.x, CACHE_POS.z];
+    case 'warlord': return [RAIDER_CAMP.x, RAIDER_CAMP.z];
   }
   return null;
 }
@@ -4155,6 +4593,8 @@ function updateMinimap() {
   dot(TOWER_POS.x, TOWER_POS.z, '#54e0e8', 4, true);
   dot(CAMPER_POS.x, CAMPER_POS.z, '#e8b93c', 4, true);
   dot(OBS_POS.x, OBS_POS.z, '#e8e4dc', 3, true);
+  dot(VILLAGE_POS.x, VILLAGE_POS.z, '#b8e08a', 3.5, true);
+  dot(RAIDER_CAMP.x, RAIDER_CAMP.z, '#ff8a5c', 3.5, true);
   for (const p of pylons) dot(p.x, p.z, p.active ? '#5ff2d0' : '#68737f', 2.5);
   for (const e of enemies) if (e.alive) dot(e.mesh.position.x, e.mesh.position.z, '#ff4a5c', 2.5);
   for (const w of wildlife) if (!w.fly) dot(w.mesh.position.x, w.mesh.position.z, '#7be08a', 1.5);
