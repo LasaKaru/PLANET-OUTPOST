@@ -62,6 +62,21 @@ html,body { width:100%; height:100%; overflow:hidden; background:#151019;
 
 #cam-ind { position:fixed; right:16px; top:54px; padding:6px 14px; font-size:10px;
   letter-spacing:2px; color:#9fd8d8; }
+#time-ind { position:fixed; right:16px; top:88px; padding:6px 14px; font-size:10px;
+  letter-spacing:2px; color:#ffd8a8; }
+#minimap { position:fixed; right:16px; top:124px; width:170px; height:170px;
+  pointer-events:none; }
+#photo-hint { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); padding:9px 20px;
+  font-size:12px; letter-spacing:1px; color:#cfe8e8; display:none; z-index:30; }
+.inv-row { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:8px 10px; margin:5px 0; border-radius:7px; background:rgba(255,255,255,0.04); font-size:13px; }
+.inv-row .iname { font-weight:700; color:#e8f0f0; }
+.inv-row .idesc { color:#a8b4c0; font-size:11.5px; }
+.inv-row .icount { color:#5ff2d0; font-weight:700; min-width:34px; text-align:center; }
+.inv-row button { pointer-events:auto; cursor:pointer; padding:5px 13px; border:none; border-radius:5px;
+  background:#2a6f66; color:#dff8f0; font-size:11px; letter-spacing:1px; }
+.inv-row button:disabled { background:#3a4048; color:#68737f; cursor:default; }
+.inv-row.equipped { border-left:3px solid #5ff2d0; }
 #mission-tracker { position:fixed; top:16px; left:50%; transform:translateX(-50%); padding:9px 22px;
   text-align:center; font-size:13.5px; max-width:560px; }
 #mission-tracker b { color:var(--amber); }
@@ -97,12 +112,12 @@ html,body { width:100%; height:100%; overflow:hidden; background:#151019;
   color:#9fd8d8; letter-spacing:1px; display:none; text-shadow:0 1px 4px rgba(0,0,0,.8); }
 
 /* ============ Journal ============ */
-#journal { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(880px,92vw);
+#journal, #inventory { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(880px,92vw);
   max-height:84vh; display:none; padding:22px 26px; overflow-y:auto; z-index:15; pointer-events:auto; }
-#journal h2 { font-size:20px; letter-spacing:3px; color:var(--teal); margin-bottom:4px; }
-#journal h3 { font-size:13px; letter-spacing:2px; color:var(--amber); margin:16px 0 8px; text-transform:uppercase;
+#journal h2, #inventory h2 { font-size:20px; letter-spacing:3px; color:var(--teal); margin-bottom:4px; }
+#journal h3, #inventory h3 { font-size:13px; letter-spacing:2px; color:var(--amber); margin:16px 0 8px; text-transform:uppercase;
   border-bottom:1px solid rgba(255,209,102,0.25); padding-bottom:4px; }
-#journal .sub { color:#8a94a4; font-size:11px; margin-bottom:6px; }
+#journal .sub, #inventory .sub { color:#8a94a4; font-size:11px; margin-bottom:6px; }
 .mission-row { padding:8px 10px; margin:5px 0; border-radius:7px; background:rgba(255,255,255,0.04);
   border-left:3px solid #3a4048; font-size:13px; }
 .mission-row.active { border-left-color:var(--teal); }
@@ -120,7 +135,7 @@ html,body { width:100%; height:100%; overflow:hidden; background:#151019;
 .upg button:disabled { background:#3a4048; color:#68737f; cursor:default; }
 .upg.owned { border-color:var(--amber); }
 #journal-lore .lore-row { font-size:12px; color:#b8c4d0; padding:4px 8px; border-left:2px solid #2a6f66; margin:4px 0; }
-#journal-close { float:right; font-size:11px; color:#8a94a4; }
+#journal-close, #inventory-close { float:right; font-size:11px; color:#8a94a4; }
 
 /* ============ Screens ============ */
 .screen { position:fixed; inset:0; display:none; flex-direction:column; align-items:center;

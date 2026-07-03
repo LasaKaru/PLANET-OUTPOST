@@ -34,6 +34,8 @@ Enemies, missions, and loot are simulated per player.
 | Space / Shift | Jump / Sprint |
 | B | Build mode (1–8 select, scroll rotates) |
 | V | Toggle first-person / third-person camera |
+| I | Inventory & crafting (H medkit, G ammo pack) |
+| P | Photo mode (free camera, F saves a screenshot) |
 | E | Interact (camper, pylons, bridge, cache) |
 | Q | Scan wildlife |
 | Tab / J | Field journal (missions, upgrades, lore) |

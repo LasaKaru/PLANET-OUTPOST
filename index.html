@@ -41,6 +41,8 @@
 
   <div id="online-ind" class="panel">◉ SOLO</div>
   <div id="cam-ind" class="panel">◐ 3RD PERSON</div>
+  <div id="time-ind" class="panel">☀ DAY</div>
+  <canvas id="minimap" width="170" height="170"></canvas>
 
   <div id="mission-tracker" class="panel">
     <div id="mission-tag">Mission</div>
@@ -63,6 +65,21 @@
     <div class="build-item" id="build-7"><div class="icon">🌉</div><span class="key">8</span> Bridge Deck<div class="cost" id="bcost-7"></div></div>
   </div>
   <div id="build-hint">CLICK — place • SCROLL — rotate • B — exit build mode</div>
+</div>
+
+<div id="photo-hint" class="panel">PHOTO MODE — WASD fly · SPACE/C up/down · SHIFT fast · F capture · P exit</div>
+
+<!-- ==================== INVENTORY ==================== -->
+<div id="inventory" class="panel">
+  <span id="inventory-close">I / ESC — close</span>
+  <h2>INVENTORY</h2>
+  <div class="sub">Field crafting works anywhere — it's half price at the camper bench. Hotkeys: <b>H</b> medkit · <b>G</b> ammo pack</div>
+  <h3>Consumables</h3>
+  <div id="inv-consumables"></div>
+  <h3>Weapons</h3>
+  <div id="inv-weapons"></div>
+  <h3>Key Items</h3>
+  <div id="inv-keys"></div>
 </div>
 
 <!-- ==================== JOURNAL ==================== -->
@@ -109,7 +126,8 @@
     <span class="k">WASD</span> Move · <span class="k">MOUSE</span> Aim · <span class="k">L-CLICK</span> Fire ·
     <span class="k">R</span> Reload · <span class="k">1-4/WHEEL</span> Weapons · <span class="k">SPACE</span> Jump<br>
     <span class="k">SHIFT</span> Sprint · <span class="k">B</span> Build · <span class="k">E</span> Interact ·
-    <span class="k">Q</span> Scan · <span class="k">V</span> Camera · <span class="k">TAB/J</span> Journal · <span class="k">ESC</span> Pause
+    <span class="k">Q</span> Scan · <span class="k">V</span> Camera · <span class="k">I</span> Inventory ·
+    <span class="k">P</span> Photo Mode · <span class="k">TAB/J</span> Journal · <span class="k">ESC</span> Pause
   </div>
   <div id="menu-tip"></div>
   <a id="menu-back" href="#" onclick="return false">← Back to site</a>

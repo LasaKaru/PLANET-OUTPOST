@@ -1831,6 +1831,10 @@ document.addEventListener('keydown', e => {
     if (e.code === 'KeyE') tryInteract();
     if (e.code === 'KeyQ') tryScan();
     if (e.code === 'KeyV') toggleCamMode();
+    if (e.code === 'KeyI') openInventory();
+    if (e.code === 'KeyP') enterPhotoMode();
+    if (e.code === 'KeyH') useMedkit();
+    if (e.code === 'KeyG') useAmmopack();
     if (e.code === 'Tab' || e.code === 'KeyJ') openJournal();
     if (buildMode) {
       for (let i = 0; i < 8; i++) if (e.code === 'Digit' + (i + 1)) selectBuild(i);
@@ -1839,6 +1843,11 @@ document.addEventListener('keydown', e => {
     }
   } else if (game.state === 'journal' && (e.code === 'Tab' || e.code === 'KeyJ' || e.code === 'Escape')) {
     closeJournal();
+  } else if (game.state === 'inventory' && (e.code === 'KeyI' || e.code === 'Escape' || e.code === 'Tab')) {
+    closeInventory();
+  } else if (game.state === 'photo') {
+    if (e.code === 'KeyP' || e.code === 'Escape') exitPhotoMode();
+    if (e.code === 'KeyF') photoShot = true;
   }
 });
 document.addEventListener('keyup', e => keys[e.code] = false);
@@ -1853,12 +1862,17 @@ canvas.addEventListener('mousedown', e => {
 });
 document.addEventListener('mouseup', () => { mouseDown = false; dragLook = false; });
 document.addEventListener('mousemove', e => {
-  if (game.state !== 'playing') return;
+  if (game.state !== 'playing' && game.state !== 'photo') return;
   let dx = 0, dy = 0;
   if (pointerLocked) { dx = e.movementX; dy = e.movementY; }
   else if (dragLook) { dx = e.clientX - lastMX; dy = e.clientY - lastMY; lastMX = e.clientX; lastMY = e.clientY; }
   else return;
   const s = 0.0024 * (settings.sens / 100);
+  if (game.state === 'photo') {   // free camera look
+    photoYaw -= dx * s;
+    photoPitch = clamp(photoPitch - (settings.invertY ? -dy : dy) * s * 0.92, -1.35, 1.35);
+    return;
+  }
   player.yaw -= dx * s;
   // pitch decreases = aim up (mouse up aims up unless inverted)
   player.pitch += (settings.invertY ? -dy : dy) * s * 0.92;
@@ -2019,6 +2033,7 @@ function updatePlayer(dt) {
 
 /* ====================== SHOOTING =================================== */
 let fireCd = 0, flashT = 0, shotLatch = false;
+let slowmoT = 0;   // kill-cam slow motion timer
 const shootRay = new THREE.Raycaster();
 const noise = { x: 0, z: 0, t: -99 };   // last gunshot, for AI investigation
 
@@ -2391,21 +2406,25 @@ function onAlert(e) {
   if (!e.alerted) { e.alerted = true; SFX.alert(); }
   if (e.type === 'scout' && !e.calledBackup) {
     e.calledBackup = true;
-    showToast('⚠ A scout drone is calling for backup!');
-    const sp = e.mesh.position.clone();
-    setTimeout(() => {
-      if (game.state !== 'playing' || !e.alive) return;
-      if (enemies.filter(x => x.alive).length >= 16) return;
-      for (let i = 0; i < 2; i++) {
-        const a = rand(0, Math.PI * 2);
-        const ne = spawnEnemy(pick(['stalker', 'exploder']),
-          clamp(sp.x + Math.cos(a) * 18, -130, 130),
-          clamp(sp.z + Math.sin(a) * 18, -130, 130));
-        ne.state = 'chase'; ne.alerted = true;
-      }
-      SFX.alert();
-    }, 1500);
+    callBackup(e, '⚠ A scout drone is calling for backup!');
   }
+}
+// radio in two reinforcements near the caller after a short delay
+function callBackup(e, label) {
+  showToast(label);
+  const sp = e.mesh.position.clone();
+  setTimeout(() => {
+    if (game.state !== 'playing' || !e.alive) return;
+    if (enemies.filter(x => x.alive).length >= 16) return;
+    for (let i = 0; i < 2; i++) {
+      const a = rand(0, Math.PI * 2);
+      const ne = spawnEnemy(pick(['stalker', 'exploder']),
+        clamp(sp.x + Math.cos(a) * 18, -130, 130),
+        clamp(sp.z + Math.sin(a) * 18, -130, 130));
+      ne.state = 'chase'; ne.alerted = true;
+    }
+    SFX.alert();
+  }, 1500);
 }
 // exploder blast: hurts the player, remote players' worlds, and buildings
 function explodeAt(pos, radius, dmg) {
@@ -2432,6 +2451,11 @@ function damageEnemy(e, dmg) {
   if (e.hp > 0 && e.hp < e.maxHp * 0.25 && !e.retreated && e.type !== 'heavy') {
     e.retreated = true; e.state = 'retreat'; e.retreatT = 2.6;
   }
+  // wounded heavies radio for reinforcements once
+  if (e.type === 'heavy' && !e.calledBackup && e.hp > 0 && e.hp < e.maxHp * 0.5) {
+    e.calledBackup = true;
+    callBackup(e, '⚠ The heavy drone is radioing reinforcements!');
+  }
   if (e.hp <= 0) killEnemy(e);
 }
 function alertNearby(src) {
@@ -2454,6 +2478,9 @@ function killEnemy(e) {
   emit(p, 0xff2a3c, 6, 8, 0.5, 0.8);
   player.kills++;
   recKill();
+  // kill-cam: slow motion when the area goes quiet
+  if (!enemies.some(o => o.alive && o !== e && o.mesh.position.distanceTo(player.pos) < 45))
+    slowmoT = 1.0;
   player.res.m += randI(e.T.drop[0] - 1, e.T.drop[0] + 2);
   player.res.e += randI(e.T.drop[1] - 1, e.T.drop[1] + 1);
   updateCountersUI();
@@ -2475,7 +2502,7 @@ function updateEnemies(dt) {
 
     // perception
     let seesPlayer = false;
-    if (distToPlayer < e.T.detectR) {
+    if (distToPlayer < e.T.detectR * nightMult()) {
       const eye = m.position.clone().add(new THREE.Vector3(0, 1.2, 0));
       const tgt = pPos.clone().add(new THREE.Vector3(0, 1.4, 0));
       const dir = tgt.clone().sub(eye), len = dir.length();
@@ -3180,7 +3207,7 @@ function completeMission(id) {
     setTimeout(() => showToast('New mission: Distress Call — head to the yellow camper'), 2800);
   } else if (id === 'defend') { player.res.cores += 2; player.res.e += 10; }
   else if (id === 'power')  { unlockWeapon(3); player.res.cores += 2; }
-  else if (id === 'survey') { player.res.cores += 2; player.res.b += 10; }
+  else if (id === 'survey') { player.res.cores += 2; player.res.b += 10; spawnCompanion(true); }
   else if (id === 'bridge') { player.res.cores += 2; player.res.m += 15; }
   else if (id === 'cache')  { unlockWeapon(2); player.res.cores += 2; }
   updateCountersUI(); updateMissionTracker();
@@ -3381,6 +3408,7 @@ function saveGame(silent) {
     secretsFound, lore: loreEntries,
     pylons: pylons.map(p => p.active),
     bridgeBuilt, cacheFound,
+    clock: Math.round(dayClock), inv: inventory, companion: hasCompanion,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) {}
   if (!silent) showToast('💾 Game saved');
@@ -3420,6 +3448,9 @@ function loadGame() {
     if (holo) bridgeMarker.remove(holo);
   }
   cacheFound = !!d.cacheFound;
+  dayClock = d.clock != null ? d.clock : 55;
+  Object.assign(inventory, d.inv || {});
+  if (d.companion) spawnCompanion(false);
   return true;
 }
 
@@ -3545,6 +3576,10 @@ const TIPS = [
   'TIP: Enemies investigate gunfire. Sometimes silence is a weapon.',
   'TIP: Resource collectors generate metal and energy over time.',
   'TIP: Far from the outpost the drones get faster, tougher, meaner.',
+  'TIP: Drones see much farther at night. Build lamps — or hunt in daylight.',
+  'TIP: Press <b>P</b> for Photo Mode — F saves a screenshot of the Wilds.',
+  'TIP: Craft medkits and ammo packs (I) — half price at the camper bench.',
+  'TIP: Watch the sky: supply pods and drone patrols come and go.',
 ];
 let tipIdx = 0;
 setInterval(() => {
@@ -3560,6 +3595,7 @@ function startGame(fromSave) {
   if (!fromSave) {
     localStorage.removeItem(SAVE_KEY);
     spawnSecrets([]);
+    dayClock = 55;
     // deploy at the location picked in SELECT LOCATION
     const L = LOCATIONS[settings.spawn || 0];
     player.pos.set(L.x + rand(-2, 2), 0, L.z + rand(-2, 2));
@@ -3674,7 +3710,8 @@ let shuttleAngle = 0;
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  let dt = Math.min(clock.getDelta(), 0.05);
+  if (slowmoT > 0) { slowmoT -= dt; dt *= 0.35; }   // kill-cam slow motion
   wallT += dt;
 
   // grass wind runs on wall time so it never freezes
@@ -3691,6 +3728,7 @@ function animate() {
   if (holo) { holo.rotation.y += dt * 2; holo.position.y = 3.4 + Math.sin(wallT * 2) * 0.2; }
   ambientPts.rotation.y += dt * 0.004;
   updateEnvAnims(dt);   // radar dish, pad lights, greenhouse plants…
+  updateDayNight(dt);
 
   if (game.state === 'playing') {
     game.time += dt;
@@ -3713,14 +3751,19 @@ function animate() {
     updateCamera(dt);
     updateRemotePlayers(dt);
     netTick(dt);
+    updateEvents(dt);
+    updateCompanion(dt);
+    updateMinimap();
 
-    sun.position.set(player.pos.x + 45, 70, player.pos.z + 25);
     sun.target.position.set(player.pos.x, 0, player.pos.z);
 
     ambientSpawnT += dt;
     if (ambientSpawnT > 18) { ambientSpawnT = 0; spawnAmbientEnemy(); }
     autosaveT += dt;
     if (autosaveT > 45) { autosaveT = 0; saveGame(true); showToast('💾 Auto-saved'); }
+  } else if (game.state === 'photo') {
+    updatePhotoCam(dt);
+    updateParticles(dt);
   } else if (game.state === 'menu' || game.state === 'splash') {
     // cinematic orbit around the base for the menu backdrop
     const a = wallT * 0.07;
@@ -3734,8 +3777,8 @@ function animate() {
     updateDamageNumbers(dt);
   }
   renderer.render(scene, camera);
+  if (photoShot) { photoShot = false; captureShot(); }
 }
-animate();
 
 /* ==================== DEPLOY LOCATIONS ============================= */
 const LOCATIONS = [
@@ -3999,5 +4042,412 @@ $('mp-connect').addEventListener('click', () => {
       st.className = 'err';
     });
 });
+
+/* =====================================================================
+   PHASE-1 SYSTEMS — day/night cycle, minimap + quest markers,
+   inventory & crafting, photo mode, companion pufflet, random events
+   ===================================================================== */
+
+/* ==================== DAY / NIGHT CYCLE ============================ */
+const DAY_LENGTH = 300;   // seconds per full cycle
+let dayClock = 55;        // start mid-morning
+let lastDayAmt = 1;
+let stormT = 0;
+const skyDay = new THREE.Color(PAL.sky), skyNight = new THREE.Color(0x1c1a30),
+      skyDusk = new THREE.Color(0xc97a5a), skyStorm = new THREE.Color(0xa08058),
+      fogDay = new THREE.Color(PAL.fog), fogNight = new THREE.Color(0x262244),
+      sunDay = new THREE.Color(0xffeed2), sunNight = new THREE.Color(0x8a9ad8);
+const _c1 = new THREE.Color(), _c2 = new THREE.Color();
+// drones see farther in the dark
+function nightMult() { return 1 + 0.35 * (1 - lastDayAmt); }
+function updateDayNight(dt) {
+  if (game.state === 'playing') dayClock += dt;
+  const phase = (dayClock / DAY_LENGTH) * Math.PI * 2;
+  const dayAmt = clamp(Math.cos(phase) * 0.5 + 0.62, 0.08, 1);
+  lastDayAmt = dayAmt;
+  const duskAmt = clamp(1 - Math.abs(dayAmt - 0.4) * 3.2, 0, 1);
+  _c1.copy(skyNight).lerp(skyDay, dayAmt).lerp(skyDusk, duskAmt * 0.55);
+  if (stormT > 0) _c1.lerp(skyStorm, 0.5);
+  scene.background.copy(_c1);
+  _c2.copy(fogNight).lerp(fogDay, dayAmt).lerp(skyDusk, duskAmt * 0.4);
+  if (stormT > 0) _c2.lerp(skyStorm, 0.5);
+  scene.fog.color.copy(_c2);
+  const q = QUALITY[settings.quality];
+  const stormF = stormT > 0 ? 0.45 : 1;
+  scene.fog.near = q.fogN * stormF;
+  scene.fog.far = q.fogF * stormF;
+  hemi.intensity = 0.22 + 0.65 * dayAmt;
+  sun.intensity = 0.1 + 0.95 * dayAmt;
+  sun.color.copy(_c1.copy(sunNight).lerp(sunDay, dayAmt));
+  const anchor = game.state === 'playing' ? player.pos : TOWER_POS;
+  sun.position.set(anchor.x + 45, 24 + 56 * dayAmt, anchor.z + 25);
+  const el = $('time-ind');
+  if (el) {
+    const label = stormT > 0 ? '🌪 DUST STORM'
+      : dayAmt > 0.55 ? '☀ DAY' : dayAmt > 0.28 ? '🌅 DUSK' : '☾ NIGHT';
+    if (el.textContent !== label) el.textContent = label;
+  }
+}
+
+/* ==================== MINIMAP + QUEST MARKERS ====================== */
+const mmCanvas = $('minimap');
+const mmCtx = mmCanvas ? mmCanvas.getContext('2d') : null;
+const MM_R = 80, MM_SCALE = 0.8;   // 1 unit = 0.8px → 100-unit view radius
+const OBS_POS = { x: -5, z: -128 };
+function nearestUnscanned() {
+  let best = null, bd = 1e9;
+  for (const c of wildlife) {
+    if (c.scanned) continue;
+    const d = c.mesh.position.distanceTo(player.pos);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+function missionTargetPos() {
+  const m = activeMission();
+  if (!m) return null;
+  switch (m.id) {
+    case 'secure': return [TOWER_POS.x, TOWER_POS.z];
+    case 'defend': return [CAMPER_POS.x, CAMPER_POS.z];
+    case 'power': {
+      let best = null, bd = 1e9;
+      for (const p of pylons) if (!p.active) {
+        const d = Math.hypot(p.x - player.pos.x, p.z - player.pos.z);
+        if (d < bd) { bd = d; best = p; }
+      }
+      return best ? [best.x, best.z] : null;
+    }
+    case 'survey': { const c = nearestUnscanned(); return c ? [c.mesh.position.x, c.mesh.position.z] : null; }
+    case 'bridge': return [BRIDGE_SPOT.x, BRIDGE_SPOT.z];
+    case 'cache': return [CACHE_POS.x, CACHE_POS.z];
+  }
+  return null;
+}
+function updateMinimap() {
+  if (!mmCtx) return;
+  const c = mmCtx, W = 170, cx = W / 2, cy = W / 2;
+  const px = player.pos.x, pz = player.pos.z;
+  c.clearRect(0, 0, W, W);
+  c.save();
+  c.beginPath(); c.arc(cx, cy, MM_R, 0, Math.PI * 2); c.clip();
+  c.fillStyle = 'rgba(12,12,20,0.72)';
+  c.fillRect(0, 0, W, W);
+  // canal ribbon
+  c.strokeStyle = 'rgba(63,168,200,0.55)'; c.lineWidth = 5;
+  c.beginPath();
+  for (let i = 0; i <= 20; i++) {
+    const wx = px - 100 + i * 10;
+    const mx = cx + (wx - px) * MM_SCALE, my = cy + (ravineCenter(wx) - pz) * MM_SCALE;
+    i === 0 ? c.moveTo(mx, my) : c.lineTo(mx, my);
+  }
+  c.stroke();
+  function dot(x, z, color, r = 3, clampEdge = false) {
+    let mx = cx + (x - px) * MM_SCALE, my = cy + (z - pz) * MM_SCALE;
+    const d = Math.hypot(mx - cx, my - cy);
+    if (d > MM_R - 5) {
+      if (!clampEdge) return;
+      const k = (MM_R - 6) / d;
+      mx = cx + (mx - cx) * k; my = cy + (my - cy) * k;
+    }
+    c.fillStyle = color;
+    c.beginPath(); c.arc(mx, my, r, 0, Math.PI * 2); c.fill();
+  }
+  dot(TOWER_POS.x, TOWER_POS.z, '#54e0e8', 4, true);
+  dot(CAMPER_POS.x, CAMPER_POS.z, '#e8b93c', 4, true);
+  dot(OBS_POS.x, OBS_POS.z, '#e8e4dc', 3, true);
+  for (const p of pylons) dot(p.x, p.z, p.active ? '#5ff2d0' : '#68737f', 2.5);
+  for (const e of enemies) if (e.alive) dot(e.mesh.position.x, e.mesh.position.z, '#ff4a5c', 2.5);
+  for (const w of wildlife) if (!w.fly) dot(w.mesh.position.x, w.mesh.position.z, '#7be08a', 1.5);
+  for (let i = 0; i < SECRETS.length; i++)   // shard detector: close range only
+    if (secretMeshes[i] && Math.hypot(SECRETS[i].x - px, SECRETS[i].z - pz) < 40)
+      dot(SECRETS[i].x, SECRETS[i].z, '#ffd166', 2.5);
+  for (const r of remotePlayers.values())
+    dot(r.mesh.group.position.x, r.mesh.group.position.z, '#c8f05a', 3, true);
+  const tgt = missionTargetPos();
+  if (tgt) dot(tgt[0], tgt[1], '#ffd166', 3.4 + Math.sin(wallT * 5) * 1.3, true);
+  c.restore();
+  // frame, compass, player heading arrow
+  c.strokeStyle = 'rgba(120,220,220,0.5)'; c.lineWidth = 1.5;
+  c.beginPath(); c.arc(cx, cy, MM_R, 0, Math.PI * 2); c.stroke();
+  c.fillStyle = '#9fd8d8'; c.font = 'bold 10px Segoe UI, Arial'; c.textAlign = 'center';
+  c.fillText('N', cx, 12);
+  c.save();
+  c.translate(cx, cy);
+  c.rotate(Math.PI - player.yaw);
+  c.fillStyle = '#ffffff';
+  c.beginPath(); c.moveTo(0, -7); c.lineTo(5, 5); c.lineTo(-5, 5); c.closePath(); c.fill();
+  c.restore();
+}
+
+/* ==================== INVENTORY & CRAFTING ========================= */
+const inventory = { medkit: 1, ammopack: 1 };
+let hasCompanion = false;
+function nearCamper() { return Math.hypot(player.pos.x - CAMPER_POS.x, player.pos.z - CAMPER_POS.z) < 10; }
+function craftCost(kind) {
+  const half = nearCamper() ? 0.5 : 1;   // camper bench discount
+  return kind === 'medkit'
+    ? { b: Math.ceil(8 * half) }
+    : { m: Math.ceil(6 * half), e: Math.ceil(4 * half) };
+}
+function craftItem(kind) {
+  const cost = craftCost(kind);
+  if (!canAfford(cost)) { SFX.deny(); showToast('Not enough resources to craft'); return; }
+  player.res.m -= cost.m || 0; player.res.e -= cost.e || 0; player.res.b -= cost.b || 0;
+  inventory[kind]++;
+  SFX.place();
+  updateCountersUI();
+  renderInventory();
+  saveGame(true);
+}
+function useMedkit() {
+  if (inventory.medkit < 1) { SFX.deny(); return; }
+  if (player.health >= player.maxHealth) { showToast('Hull already at full integrity'); return; }
+  inventory.medkit--;
+  player.health = Math.min(player.maxHealth, player.health + 50);
+  SFX.heal();
+  emit(player.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), 0xe86a9e, 10, 3, 0.7, 0.8, 0.1);
+  updateHealthUI();
+  showToast('✚ Medkit used (+50 hull)');
+  if (game.state === 'inventory') renderInventory();
+}
+function useAmmopack() {
+  if (inventory.ammopack < 1) { SFX.deny(); return; }
+  inventory.ammopack--;
+  const ws = curWState();
+  ws.reserve += magSizeOf(player.cur) * 2;
+  SFX.reload();
+  updateAmmoUI();
+  showToast('▮ Ammo pack used — ' + curWeapon().name + ' restocked');
+  if (game.state === 'inventory') renderInventory();
+}
+function invRow(html) {
+  const div = document.createElement('div');
+  div.className = 'inv-row';
+  div.innerHTML = html;
+  return div;
+}
+function renderInventory() {
+  const cons = $('inv-consumables');
+  cons.innerHTML = '';
+  const bench = nearCamper();
+  for (const [kind, label, desc, useFn] of [
+    ['medkit', '✚ Medkit', 'Restores 50 hull. Hotkey H.', useMedkit],
+    ['ammopack', '▮ Ammo Pack', 'Two magazines for the current weapon. Hotkey G.', useAmmopack],
+  ]) {
+    const cost = craftCost(kind);
+    const row = invRow('<div><div class="iname">' + label + '</div><div class="idesc">' + desc +
+      ' Craft: ' + costText(cost).replace('<br>', ' + ') + (bench ? ' <b style="color:#c8f05a">(bench price)</b>' : '') +
+      '</div></div><span class="icount">×' + inventory[kind] + '</span>');
+    const use = document.createElement('button');
+    use.textContent = 'USE';
+    use.disabled = inventory[kind] < 1;
+    use.addEventListener('click', useFn);
+    const craft = document.createElement('button');
+    craft.textContent = 'CRAFT';
+    craft.disabled = !canAfford(cost);
+    craft.addEventListener('click', () => craftItem(kind));
+    row.appendChild(use); row.appendChild(craft);
+    cons.appendChild(row);
+  }
+  const wl = $('inv-weapons');
+  wl.innerHTML = '';
+  WEAPONS.forEach((w, i) => {
+    const ws = player.weapons[i];
+    if (!ws.unlocked) {
+      wl.appendChild(invRow('<div><div class="iname" style="color:#68737f">🔒 ' + w.name +
+        '</div><div class="idesc">Locked — complete missions to unlock.</div></div>'));
+      return;
+    }
+    const row = invRow('<div><div class="iname">' + w.name + (i === player.cur ? ' — EQUIPPED' : '') +
+      '</div><div class="idesc">Damage ' + Math.round(w.dmg * dmgMult()) +
+      (w.pellets > 1 ? ' ×' + w.pellets : '') + ' · Mag ' + magSizeOf(i) +
+      ' · Reserve ' + ws.reserve + '</div></div>');
+    if (i === player.cur) row.classList.add('equipped');
+    else {
+      const eq = document.createElement('button');
+      eq.textContent = 'EQUIP';
+      eq.addEventListener('click', () => { switchWeapon(i); renderInventory(); });
+      row.appendChild(eq);
+    }
+    wl.appendChild(row);
+  });
+  $('inv-keys').innerHTML =
+    '<div class="inv-row"><div><div class="iname">◆ Data Shards</div><div class="idesc">Hidden across the Wilds.</div></div><span class="icount">' + secretsFound.length + ' / 8</span></div>' +
+    '<div class="inv-row"><div><div class="iname">📖 Lore Entries</div><div class="idesc">Scans and discoveries in the journal.</div></div><span class="icount">' + loreEntries.length + '</span></div>' +
+    (hasCompanion ? '<div class="inv-row"><div><div class="iname">🐾 Pufflet Companion</div><div class="idesc">Follows you and sniffs out spare resources.</div></div><span class="icount">♥</span></div>' : '');
+}
+function openInventory() {
+  if (game.state !== 'playing') return;
+  game.state = 'inventory';
+  renderInventory();
+  $('inventory').style.display = 'block';
+  expectUnlock = true;
+  if (document.exitPointerLock) document.exitPointerLock();
+}
+function closeInventory() {
+  $('inventory').style.display = 'none';
+  game.state = 'playing';
+  requestLock();
+}
+
+/* ==================== PHOTO MODE =================================== */
+let photoYaw = 0, photoPitch = 0, photoShot = false;
+const photoPos = new THREE.Vector3();
+function enterPhotoMode() {
+  if (game.state !== 'playing') return;
+  game.state = 'photo';
+  photoPos.copy(camera.position);
+  photoYaw = player.yaw;
+  photoPitch = -player.pitch;
+  $('hud').style.display = 'none';
+  $('photo-hint').style.display = 'block';
+  player.mesh.group.visible = true;   // pose your explorer in the shot
+  fpRig.visible = false;
+  SFX.click();
+}
+function exitPhotoMode() {
+  game.state = 'playing';
+  $('hud').style.display = 'block';
+  $('photo-hint').style.display = 'none';
+  setCamMode(camMode);
+  requestLock();
+}
+function updatePhotoCam(dt) {
+  const sp = (keys['ShiftLeft'] || keys['ShiftRight']) ? 28 : 11;
+  const fwd = new THREE.Vector3(
+    Math.sin(photoYaw) * Math.cos(photoPitch), Math.sin(photoPitch),
+    Math.cos(photoYaw) * Math.cos(photoPitch));
+  const right = new THREE.Vector3(Math.cos(photoYaw), 0, -Math.sin(photoYaw));
+  if (keys['KeyW']) photoPos.addScaledVector(fwd, sp * dt);
+  if (keys['KeyS']) photoPos.addScaledVector(fwd, -sp * dt);
+  if (keys['KeyD']) photoPos.addScaledVector(right, sp * dt);
+  if (keys['KeyA']) photoPos.addScaledVector(right, -sp * dt);
+  if (keys['Space']) photoPos.y += sp * dt;
+  if (keys['KeyC']) photoPos.y -= sp * dt;
+  photoPos.y = Math.max(photoPos.y, terrainHeight(photoPos.x, photoPos.z) + 0.4);
+  camera.position.copy(photoPos);
+  camera.lookAt(photoPos.clone().add(fwd));
+}
+function captureShot() {
+  try {
+    const a = document.createElement('a');
+    a.href = renderer.domElement.toDataURL('image/png');
+    a.download = 'planet-outpost-' + Date.now() + '.png';
+    a.click();
+    SFX.click();
+  } catch (err) { /* canvas capture unavailable */ }
+}
+
+/* ==================== COMPANION PUFFLET ============================ */
+let companion = null, compGiftT = 35;
+function spawnCompanion(announce) {
+  if (companion) return;
+  hasCompanion = true;
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.4, 0), mat(PAL.magenta));
+  body.scale.y = 0.85; body.position.y = 0.36; body.castShadow = true; g.add(body);
+  for (const sd of [-1, 1]) {
+    const e = new THREE.Mesh(eyeGeo, eyeMat);
+    e.position.set(sd * 0.14, 0.44, 0.34); g.add(e);
+  }
+  const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.3, 4), mat(PAL.grayDark));
+  ant.position.y = 0.85; g.add(ant);
+  const tip = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), MAT.cyanGlow);
+  tip.position.y = 1.05; g.add(tip);
+  g.position.copy(player.pos).add(new THREE.Vector3(1.5, 0, -1.5));
+  scene.add(g);
+  companion = { g, t: rand(0, 5) };
+  if (announce) showMessage('🐾 A curious pufflet has decided to follow you!');
+}
+function updateCompanion(dt) {
+  if (!companion) return;
+  const c = companion;
+  c.t += dt;
+  // trot to a spot behind-left of the player
+  const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+  const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
+  const target = player.pos.clone().addScaledVector(fwd, -1.8).addScaledVector(right, -1.1);
+  const d = c.g.position.distanceTo(target);
+  if (d > 0.3) {
+    c.g.position.lerp(target, Math.min(dt * (d > 8 ? 6 : 2.6), 1));
+    c.g.rotation.y = Math.atan2(target.x - c.g.position.x, target.z - c.g.position.z);
+  }
+  c.g.position.y = terrainHeight(c.g.position.x, c.g.position.z) +
+    Math.abs(Math.sin(c.t * 7)) * 0.28 * Math.min(d, 1);
+  // it occasionally sniffs out spare resources while you travel
+  if (player.moveAmount > 0.5) compGiftT -= dt;
+  if (compGiftT <= 0) {
+    compGiftT = rand(28, 45);
+    const kind = pick(['m', 'e', 'b']);
+    player.res[kind]++;
+    updateCountersUI();
+    SFX.chirp();
+    showToast('🐾 Your pufflet dug up +1 ' + (kind === 'm' ? 'metal' : kind === 'e' ? 'energy' : 'bio-matter'));
+  }
+}
+
+/* ==================== RANDOM EVENTS ================================ */
+let eventT = 95;
+const pods = [];
+function updateEvents(dt) {
+  if (stormT > 0) stormT -= dt;
+  eventT -= dt;
+  if (eventT <= 0) {
+    eventT = rand(110, 170);
+    const roll = srand();
+    if (roll < 0.35) {
+      showMessage('⚠ Drone patrol passing through the area');
+      for (let i = 0; i < 3; i++) {
+        const a = rand(0, Math.PI * 2);
+        spawnEnemy('wasp',
+          clamp(player.pos.x + Math.cos(a) * 38, -130, 130),
+          clamp(player.pos.z + Math.sin(a) * 38, -130, 130));
+      }
+      SFX.alert();
+    } else if (roll < 0.72) {
+      showMessage('📦 Supply pod inbound — watch the sky!');
+      const a = rand(0, Math.PI * 2), r = rand(18, 30);
+      const x = clamp(player.pos.x + Math.cos(a) * r, -130, 130);
+      const z = clamp(player.pos.z + Math.sin(a) * r, -130, 130);
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.0, 1.6, 6), MAT.mustard);
+      body.position.y = 0.8; body.castShadow = true; g.add(body);
+      const top = new THREE.Mesh(new THREE.ConeGeometry(0.9, 0.7, 6), MAT.grayDark);
+      top.position.y = 1.9; g.add(top);
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.35, 26, 5),
+        new THREE.MeshBasicMaterial({ color: 0x5ff2d0, transparent: true, opacity: 0.28, depthWrite: false }));
+      beam.position.y = 14; g.add(beam);
+      g.position.set(x, terrainHeight(x, z) + 70, z);
+      scene.add(g);
+      pods.push({ g, x, z, vy: 0, landed: false, life: 75 });
+    } else {
+      showMessage('🌪 A dust storm is rolling in — visibility dropping…');
+      stormT = 40;
+      SFX.gust();
+    }
+  }
+  for (let i = pods.length - 1; i >= 0; i--) {
+    const p = pods[i];
+    if (!p.landed) {
+      p.vy -= 18 * dt;
+      p.g.position.y += p.vy * dt;
+      const gy = terrainHeight(p.x, p.z);
+      if (p.g.position.y <= gy) {
+        p.g.position.y = gy;
+        p.landed = true;
+        SFX.explode();
+        emit(p.g.position.clone().add(new THREE.Vector3(0, 0.5, 0)), 0xd0764a, 14, 6, 0.8, 1.3);
+        for (let k = 0; k < 3; k++)
+          spawnPickup(pick(['metal', 'energy', 'ammo']),
+            p.x + rand(-2.5, 2.5), p.z + rand(-2.5, 2.5));
+      }
+    } else {
+      p.life -= dt;
+      if (p.life <= 0) { scene.remove(p.g); pods.splice(i, 1); }
+    }
+  }
+}
+
+animate();
 
 })();
