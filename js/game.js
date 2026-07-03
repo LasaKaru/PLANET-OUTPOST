@@ -171,6 +171,8 @@ const SFX = (() => {
     click()   { tone('triangle', 700, 500, 0.05, 0.12); },
     hover()   { tone('triangle', 900, 800, 0.03, 0.05); },
     water()   { noise(0.9, 0.09, 950, 0.4); },
+    gust()    { noise(1.6, 0.1, 420, 0.3); },
+    remoteFire() { tone('square', 700, 200, 0.05, 0.05); },
     step()    { noise(0.07, 0.09, 480 + srand() * 160); },
     land()    { noise(0.12, 0.2, 350); tone('sine', 140, 70, 0.1, 0.12); },
     chirp() {
@@ -471,8 +473,9 @@ function makeGrassMaterial(color) {
       `#include <begin_vertex>
       #ifdef USE_INSTANCING
         float wPhase = instanceMatrix[3][0] * 0.35 + instanceMatrix[3][2] * 0.43;
-        float sway = sin(uTime * 1.7 + wPhase) + 0.4 * sin(uTime * 3.3 + wPhase * 2.1);
-        transformed.x += sway * 0.22 * pow(max(transformed.y, 0.0), 1.5);
+        float gust = 0.7 + 0.5 * sin(uTime * 0.35 + wPhase * 0.15);   // rolling gusts
+        float sway = (sin(uTime * 1.7 + wPhase) + 0.4 * sin(uTime * 3.3 + wPhase * 2.1)) * gust;
+        transformed.x += sway * 0.24 * pow(max(transformed.y, 0.0), 1.5);
       #endif`);
     m.userData.shader = shader;
   };
@@ -1330,8 +1333,11 @@ function makeWaterfall(x, z, ry, height = 8, intoCanal = false) {
   waterfalls.push({ x, z });
   return g;
 }
-// western source pouring into the canal + two scenic falls with ponds
+// western source pouring into the canal — three cascade tiers like the
+// reference art — plus two scenic falls with ponds
 makeWaterfall(-133, ravineCenter(-133), Math.PI / 2, 9, true);
+makeWaterfall(-126, ravineCenter(-126), Math.PI / 2, 5.5, true);
+makeWaterfall(-119, ravineCenter(-119), Math.PI / 2, 3.5, true);
 makeWaterfall(-52, -58, 0.3, 8);
 makeWaterfall(104, 58, -2.2, 7);
 
@@ -1361,12 +1367,170 @@ envAnims.push(dt => {
   }
 });
 
+/* =====================================================================
+   SHOWCASE PASS — observatory dome tower, arched stone bridges over
+   the canal, road lamp posts, swaying riverbank reeds, wind-blown
+   petals, and rolling gust audio.
+   ===================================================================== */
+
+/* ---- observatory: white dome on a tall column (key-art landmark) ---- */
+(function observatory() {
+  const g = new THREE.Group();
+  const white = mat(0xe8e4dc), cream = mat(0xd8d0c2);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 3.0, 14, 8), MAT.grayLight);
+  column.position.y = 7; column.castShadow = true; g.add(column);
+  for (let i = 0; i < 3; i++) {
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.5, 0.5, 8), MAT.grayDark);
+    ring.position.y = 3.5 + i * 4; g.add(ring);
+  }
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(2.8, 2.2, 1.4, 8), cream);
+  neck.position.y = 14.6; g.add(neck);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(3.2, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), white);
+  dome.position.y = 15.2; dome.castShadow = true; g.add(dome);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(3.25, 3.25, 0.4, 10), MAT.darkGlass);
+  band.position.y = 15.6; g.add(band);
+  const winStrip = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, 0.2), MAT.windowGlow);
+  winStrip.position.set(0, 12.2, 2.6); g.add(winStrip);
+  for (let i = 0; i < 3; i++) {
+    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.07, rand(2.5, 4.2), 4), MAT.grayDark);
+    ant.position.set(rand(-1.4, 1.4), 17.6 + rand(0, 1), rand(-1.4, 1.4)); g.add(ant);
+  }
+  const beacon = new THREE.Mesh(new THREE.OctahedronGeometry(0.3, 0), MAT.redGlow.clone());
+  beacon.position.y = 18.9; g.add(beacon);
+  envAnims.push((dt, t) => { beacon.material.emissiveIntensity = 1.2 + Math.sin(t * 2.4) * 1.0; });
+  const x = -5, z = -128;
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  circleColliders.push({ x, z, r: 3.4 });
+  g.traverse(o => { if (o.isMesh) { cameraBlockers.push(o); losBlockers.push(o); } });
+})();
+
+/* ---- arched stone bridges over the canal (reference-art curves) ---- */
+function stoneArchBridge(x) {
+  const cz = ravineCenter(x);
+  const g = new THREE.Group();
+  const span = 21, segs = 7;
+  const topY = Math.max(terrainHeight(x, cz - span / 2 - 1), terrainHeight(x, cz + span / 2 + 1)) + 1.9;
+  for (let i = 0; i < segs; i++) {
+    const t = i / (segs - 1);
+    const z = cz - span / 2 + t * span;
+    const y = topY - Math.pow((t - 0.5) * 2, 2) * 2.1;
+    const seg = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.55, span / segs + 0.55), MAT.grayDark);
+    seg.position.set(x, y, z);
+    seg.rotation.x = -(t - 0.5) * 0.55;
+    seg.castShadow = seg.receiveShadow = true;
+    g.add(seg);
+    addPlatform(x, z, 3.6, span / segs + 0.5, y + 0.32);
+    // low side walls
+    for (const sd of [-1, 1]) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.5, span / segs + 0.55), MAT.rock);
+      wall.position.set(x + sd * 1.75, y + 0.5, z);
+      wall.rotation.x = -(t - 0.5) * 0.55;
+      g.add(wall);
+    }
+  }
+  // support pillars into the water
+  for (const off of [-span * 0.32, span * 0.32]) {
+    const gy = terrainHeight(x, cz + off);
+    const h = topY - 1.4 - gy;
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(2.4, Math.max(h, 1), 1.6), MAT.rock);
+    leg.position.set(x, gy + h / 2, cz + off);
+    leg.castShadow = true;
+    g.add(leg);
+  }
+  scene.add(g);
+  g.traverse(o => { if (o.isMesh) cameraBlockers.push(o); });
+}
+stoneArchBridge(-90);
+stoneArchBridge(50);
+
+/* ---- glowing lamp posts along the roads ---- */
+(function roadLamps() {
+  const poleGeo = new THREE.CylinderGeometry(0.06, 0.1, 2.1, 5);
+  let count = 0;
+  for (let i = 20; i < roadSamples.length && count < 26; i += 26) {
+    const [x, z] = roadSamples[i];
+    const ox = x + 2.4, oz = z + rand(-0.5, 0.5);
+    if (inRavine(ox, oz)) continue;
+    const gy = terrainHeight(ox, oz);
+    const pole = new THREE.Mesh(poleGeo, MAT.grayDark);
+    pole.position.set(ox, gy + 1.05, oz);
+    scene.add(pole);
+    const tip = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), MAT.cyanGlow);
+    tip.position.set(ox, gy + 2.25, oz);
+    scene.add(tip);
+    count++;
+  }
+})();
+
+/* ---- swaying reeds along the canal banks (share the grass shader) ---- */
+(function bankReeds() {
+  const reedGeo = new THREE.ConeGeometry(0.09, 1.5, 4);
+  reedGeo.translate(0, 0.75, 0);
+  for (const color of [0x2f8f7a, 0x3fae74]) {
+    const N = 130;
+    const inst = new THREE.InstancedMesh(reedGeo, makeGrassMaterial(color), N);
+    const dummy = new THREE.Object3D();
+    let i = 0, guard = 0;
+    while (i < N && guard++ < 800) {
+      const x = rand(-132, 132);
+      const cz = ravineCenter(x);
+      const z = cz + pick([-1, 1]) * rand(4.8, 6.4);
+      dummy.position.set(x, terrainHeight(x, z), z);
+      dummy.rotation.y = rand(0, Math.PI);
+      dummy.scale.set(rand(0.7, 1.2), rand(0.7, 1.4), rand(0.7, 1.2));
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+      i++;
+    }
+    inst.count = i;
+    scene.add(inst);
+  }
+})();
+
+/* ---- wind-blown petals drifting across the world ---- */
+(function petals() {
+  const N = 110;
+  const pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    pos[i*3] = rand(-60, 60); pos[i*3+1] = rand(0.5, 9); pos[i*3+2] = rand(-60, 60);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+    color: 0xf2b8d8, size: 0.22, transparent: true, opacity: 0.8, depthWrite: false }));
+  scene.add(pts);
+  envAnims.push((dt, t) => {
+    const cx = camera.position.x, cz2 = camera.position.z;
+    for (let i = 0; i < N; i++) {
+      pos[i*3]   += dt * (2.2 + Math.sin(t * 0.35 + i) * 1.2);   // gusty wind +x
+      pos[i*3+1] += Math.sin(t * 2 + i * 1.7) * dt * 0.8;
+      pos[i*3+2] += dt * Math.sin(t * 0.6 + i * 0.4) * 0.7;
+      // keep petals recycling around the camera
+      if (pos[i*3] > cx + 65) pos[i*3] = cx - 65;
+      if (pos[i*3+2] > cz2 + 65) pos[i*3+2] = cz2 - 65;
+      else if (pos[i*3+2] < cz2 - 65) pos[i*3+2] = cz2 + 65;
+      if (pos[i*3+1] < 0.3) pos[i*3+1] = rand(4, 9);
+      if (pos[i*3+1] > 12) pos[i*3+1] = rand(1, 4);
+    }
+    geo.attributes.position.needsUpdate = true;
+  });
+})();
+
+/* ---- rolling wind gust audio ---- */
+let gustT = 6;
+envAnims.push(dt => {
+  gustT -= dt;
+  if (gustT <= 0) { gustT = rand(9, 18); SFX.gust(); }
+});
+
 /* ==================== WEAPON MODELS ================================ */
 // Shared by the third-person rig, the first-person viewmodel, and
 // remote co-op players.
 const flashMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true,
   opacity: 0.95, side: THREE.DoubleSide, depthWrite: false });
-const gunMats = { body: mat(0x2a7f74), dark: mat(0x3a3f4a), trim: mat(PAL.orange) };
+const gunMats = { body: mat(PAL.teal), body2: mat(0x59d6c4), dark: mat(0x3a3f4a),
+  trim: mat(PAL.orange), plate: mat(0x2f3540) };
 function makeFlash(z) {
   const f = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
   f.position.set(0, 0.05, z); f.visible = false;
@@ -1374,43 +1538,81 @@ function makeFlash(z) {
 }
 function gunPistol() {
   const gg = new THREE.Group();
-  const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 0.6), gunMats.body); gg.add(b);
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.26, 0.14), gunMats.trim);
-  grip.position.set(0, -0.2, -0.12); gg.add(grip);
-  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.16), MAT.cyanGlow);
-  cell.position.set(0, 0.13, 0); gg.add(cell);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.22, 0.62), gunMats.body); gg.add(body);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.5), gunMats.dark);
+  top.position.set(0, 0.14, 0.02); gg.add(top);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.24, 0.1), gunMats.trim);
+  band.position.z = 0.2; gg.add(band);
+  const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.16), gunMats.dark);
+  muzzle.position.set(0, 0.02, 0.42); gg.add(muzzle);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.3, 0.16), gunMats.plate);
+  grip.position.set(0, -0.22, -0.14); grip.rotation.x = 0.25; gg.add(grip);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.08, 0.14), MAT.cyanGlow);
+  cell.position.set(0, 0.11, -0.14); gg.add(cell);
   gg.userData.flashZ = 0.55;
   return gg;
 }
 function gunRifle() {
+  // hero weapon — matches the first-person key art: chunky teal receiver,
+  // orange armor bands, orange vent grill on the muzzle shroud
   const gg = new THREE.Group();
-  const b = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 1.05), gunMats.body); gg.add(b);
-  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.5), gunMats.dark);
-  barrel.position.set(0, 0.05, 0.72); gg.add(barrel);
-  const magz = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.3, 0.16), gunMats.dark);
-  magz.position.set(0, -0.24, 0.1); gg.add(magz);
-  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.2), MAT.cyanGlow);
-  cell.position.set(0, 0.14, 0.05); gg.add(cell);
-  gg.userData.flashZ = 1.0;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.26, 1.15), gunMats.body); gg.add(body);
+  const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.42), gunMats.body2);
+  shroud.position.set(0, 0.03, 0.62); gg.add(shroud);
+  for (const z of [0.18, -0.18]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.29, 0.09), gunMats.trim);
+    band.position.z = z; gg.add(band);
+  }
+  for (let i = 0; i < 3; i++) {
+    const v = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.03, 0.05), gunMats.trim);
+    v.position.set(0, 0.07 - i * 0.055, 0.72); gg.add(v);
+  }
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.3), gunMats.dark);
+  barrel.position.set(0, 0.05, 0.95); gg.add(barrel);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 0.3), gunMats.plate);
+  stock.position.set(0, -0.04, -0.68); gg.add(stock);
+  const magz = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.32, 0.18), gunMats.dark);
+  magz.position.set(0, -0.27, 0.05); magz.rotation.x = 0.15; gg.add(magz);
+  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.14), gunMats.dark);
+  sight.position.set(0, 0.2, -0.1); gg.add(sight);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.1, 0.2), MAT.cyanGlow);
+  cell.position.set(0, 0.15, 0.05); gg.add(cell);
+  gg.userData.flashZ = 1.1;
   return gg;
 }
 function gunShotgun() {
   const gg = new THREE.Group();
-  const b = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.24, 0.9), mat(PAL.mustard)); gg.add(b);
-  const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.7), gunMats.dark);
-  b2.position.set(0, -0.14, 0.15); gg.add(b2);
-  const pump = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 0.3), gunMats.trim);
-  pump.position.set(0, -0.13, 0.45); gg.add(pump);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.24, 0.95), mat(PAL.mustard)); gg.add(body);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.27, 0.1), gunMats.trim);
+  band.position.z = 0.12; gg.add(band);
+  const under = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.7), gunMats.dark);
+  under.position.set(0, -0.14, 0.15); gg.add(under);
+  const pump = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.15, 0.3), gunMats.body);
+  pump.position.set(0, -0.14, 0.45); gg.add(pump);
+  const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.17, 0.14), gunMats.dark);
+  muzzle.position.set(0, 0, 0.55); gg.add(muzzle);
+  for (let i = 0; i < 2; i++) {
+    const v = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.03, 0.05), gunMats.trim);
+    v.position.set(0, 0.06 - i * 0.06, 0.34); gg.add(v);
+  }
   gg.userData.flashZ = 0.75;
   return gg;
 }
 function gunSniper() {
   const gg = new THREE.Group();
-  const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 1.5), mat(PAL.techBlue)); gg.add(b);
-  const scopeM = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 6), gunMats.dark);
-  scopeM.rotation.x = Math.PI / 2; scopeM.position.set(0, 0.17, 0.1); gg.add(scopeM);
-  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.32), MAT.cyanGlow);
-  cell.position.set(0, 0.07, -0.4); gg.add(cell);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 1.55), mat(PAL.techBlue)); gg.add(body);
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 1.0), gunMats.body);
+  rail.position.set(0, 0.13, 0.15); gg.add(rail);
+  for (const z of [0.45, -0.25]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.24, 0.09), gunMats.trim);
+    band.position.z = z; gg.add(band);
+  }
+  const scopeM = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.42, 6), gunMats.dark);
+  scopeM.rotation.x = Math.PI / 2; scopeM.position.set(0, 0.22, -0.05); gg.add(scopeM);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.34), MAT.cyanGlow);
+  cell.position.set(0, 0.05, -0.5); gg.add(cell);
+  const bipod = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.04), gunMats.dark);
+  bipod.position.set(0, -0.18, 0.6); gg.add(bipod);
   gg.userData.flashZ = 1.35;
   return gg;
 }
@@ -1428,63 +1630,98 @@ function makeGunSet() {
   return { gunMeshes, flashes };
 }
 
-/* ====================== PLAYER CHARACTER =========================== */
-// Also used for remote co-op players (each gets a different suit color)
+/* ====================== PLAYER CHARACTER ===========================
+   Two-segment limbs (shoulder→elbow, hip→knee) so walking, jumping and
+   reloading read clearly. Also used for remote co-op players. */
 function buildPlayerMesh(suitColor = PAL.teal, trimColor = PAL.orange) {
   const suit = mat(suitColor), trim = mat(trimColor),
-        dark = mat(0x3a3f4a), pack = mat(PAL.blue);
+        dark = mat(0x3a3f4a), pack = mat(PAL.blue), glove = mat(0x2f3540);
   const g = new THREE.Group();
+  // torso: chest plate, glowing status light, stripe, belt with pouch
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.05, 0.5), suit);
   torso.position.y = 1.25; g.add(torso);
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.42, 0.14), trim);
+  chest.position.set(0, 1.45, 0.29); g.add(chest);
+  const chestLight = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.09, 0.06), MAT.cyanGlow);
+  chestLight.position.set(0.21, 1.5, 0.37); g.add(chestLight);
   const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.02, 0.06), trim);
   stripe.position.set(0, 1.25, 0.26); g.add(stripe);
   const belt = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.16, 0.55), dark);
   belt.position.y = 0.74; g.add(belt);
+  const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.12), dark);
+  pouch.position.set(-0.28, 0.72, 0.3); g.add(pouch);
+  // backpack with oxygen tank + antenna
   const bp = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.3), pack);
-  bp.position.set(0, 1.35, -0.4); g.add(bp);
+  bp.position.set(0, 1.35, -0.42); g.add(bp);
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.5, 6), MAT.grayLight);
+  tank.position.set(0.18, 1.45, -0.62); g.add(tank);
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.55, 4), dark);
+  antenna.position.set(-0.24, 1.95, -0.5); g.add(antenna);
+  const antTip = new THREE.Mesh(new THREE.OctahedronGeometry(0.05, 0), MAT.redGlow);
+  antTip.position.set(-0.24, 2.25, -0.5); g.add(antTip);
+  // head: helmet, visor with glow trim, crest, ear pods
   const head = new THREE.Group();
   const helmet = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 1), suit);
   helmet.scale.set(1, 0.95, 1); head.add(helmet);
   const visor = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.2), MAT.darkGlass);
   visor.position.set(0, -0.02, 0.32); head.add(visor);
+  const visorTrim = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.04, 0.18), MAT.cyanGlow);
+  visorTrim.position.set(0, -0.2, 0.3); head.add(visorTrim);
   const crest = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.7), trim);
   crest.position.y = 0.36; head.add(crest);
+  for (const sd of [-1, 1]) {
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.08, 6), trim);
+    pod.rotation.z = Math.PI / 2; pod.position.set(sd * 0.42, -0.02, 0.05); head.add(pod);
+  }
   head.position.y = 2.15; g.add(head);
+  // arms: shoulder pivot → elbow pivot
   function arm(side) {
-    const p = new THREE.Group();
-    const up = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.5, 0.3), suit);
-    up.position.y = -0.25; p.add(up);
-    const lo = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.45, 0.26), trim);
-    lo.position.y = -0.68; p.add(lo);
-    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.28), suit);
-    hand.position.y = -0.98; p.add(hand);
-    p.position.set(side * 0.56, 1.72, 0); g.add(p);
-    return p;
+    const sh = new THREE.Group();
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.2, 0.38), trim);
+    pad.position.y = 0.06; sh.add(pad);
+    const up = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.42, 0.3), suit);
+    up.position.y = -0.22; sh.add(up);
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.45;
+    const lo = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.4, 0.26), trim);
+    lo.position.y = -0.2; elbow.add(lo);
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.28), glove);
+    hand.position.y = -0.46; elbow.add(hand);
+    sh.add(elbow);
+    sh.position.set(side * 0.58, 1.72, 0);
+    g.add(sh);
+    return { sh, elbow };
   }
-  const armL = arm(-1), armR = arm(1);
+  const aL = arm(-1), aR = arm(1);
+  // legs: hip pivot → knee pivot
   function leg(side) {
-    const p = new THREE.Group();
-    const th = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.5, 0.34), suit);
-    th.position.y = -0.25; p.add(th);
-    const knee = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.36), trim);
-    knee.position.y = -0.52; p.add(knee);
-    const sh = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.35, 0.3), suit);
-    sh.position.y = -0.78; p.add(sh);
-    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 0.42), dark);
-    boot.position.set(0, -1.02, 0.05); p.add(boot);
-    p.position.set(side * 0.24, 0.72, 0); g.add(p);
-    return p;
+    const hip = new THREE.Group();
+    const th = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.45, 0.34), suit);
+    th.position.y = -0.22; hip.add(th);
+    const knee = new THREE.Group();
+    knee.position.y = -0.48;
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.36), trim);
+    knee.add(pad);
+    const sh2 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.35, 0.3), suit);
+    sh2.position.y = -0.24; knee.add(sh2);
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 0.44), dark);
+    boot.position.set(0, -0.48, 0.06); knee.add(boot);
+    hip.add(knee);
+    hip.position.set(side * 0.24, 0.72, 0);
+    g.add(hip);
+    return { hip, knee };
   }
-  const legL = leg(-1), legR = leg(1);
-
+  const lL = leg(-1), lR = leg(1);
   const { gunMeshes, flashes } = makeGunSet();
   gunMeshes.forEach(gm => {
-    gm.position.set(0, -1.0, 0.28);
+    gm.position.set(0, -0.52, 0.3);
     gm.rotation.x = Math.PI / 2;   // align barrel with the raised arm's forward axis
-    armR.add(gm);
+    aR.elbow.add(gm);
   });
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  return { group: g, armL, armR, legL, legR, head, gunMeshes, flashes };
+  return { group: g, armL: aL.sh, elbowL: aL.elbow, armR: aR.sh, elbowR: aR.elbow,
+           legL: lL.hip, kneeL: lL.knee, legR: lR.hip, kneeR: lR.knee,
+           head, gunMeshes, flashes };
 }
 
 /* ==================== WEAPONS DATA ================================= */
@@ -1519,9 +1756,15 @@ const fpRig = new THREE.Group();
 const fpSet = makeGunSet();
 const fpFlashes = fpSet.flashes;
 fpSet.gunMeshes.forEach(gm => { gm.rotation.y = Math.PI; fpRig.add(gm); });
-const fpArm = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.55), mat(PAL.teal));
-fpArm.position.set(0.1, -0.15, 0.28); fpArm.rotation.x = 0.35;
-fpRig.add(fpArm);
+const fpArmGroup = new THREE.Group();
+const fpFore = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.17, 0.62), mat(PAL.teal));
+fpFore.position.set(0.15, -0.28, 0.4); fpFore.rotation.x = 0.55; fpFore.rotation.z = -0.15;
+fpArmGroup.add(fpFore);
+const fpWrist = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.19, 0.1), mat(PAL.orange));
+fpWrist.position.set(0.08, -0.15, 0.16); fpWrist.rotation.x = 0.55; fpArmGroup.add(fpWrist);
+const fpGlove = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.2), mat(0x6e4a38));
+fpGlove.position.set(0, -0.09, 0.0); fpArmGroup.add(fpGlove);
+fpRig.add(fpArmGroup);
 fpRig.position.set(0.38, -0.34, -0.7);
 fpRig.scale.setScalar(0.8);
 fpRig.visible = false;
@@ -1719,14 +1962,31 @@ function updatePlayer(dt) {
   if (player.grounded && player.moveAmount > 0.3 &&
       Math.floor(player.walkPhase / Math.PI) !== prevStep) SFX.step();
   const s = Math.sin(player.walkPhase), amp = 0.55 * Math.min(player.moveAmount, 1.2);
+  // two-segment limbs: hips/shoulders swing, knees/elbows flex on the
+  // back-swing so strides read clearly
   m.legL.rotation.x = s * amp;
   m.legR.rotation.x = -s * amp;
+  m.kneeL.rotation.x = Math.max(0, -s) * amp * 1.15;
+  m.kneeR.rotation.x = Math.max(0, s) * amp * 1.15;
   m.armL.rotation.x = -s * amp * 0.8;
+  m.elbowL.rotation.x = -Math.max(0, s) * amp * 0.5 - 0.08;
+  m.elbowR.rotation.x = -0.3;                       // supporting the gun
+  if (!player.grounded) {                           // airborne tuck
+    m.legL.rotation.x = -0.55; m.legR.rotation.x = -0.3;
+    m.kneeL.rotation.x = 1.05; m.kneeR.rotation.x = 0.75;
+    m.armL.rotation.x = -0.8;
+  }
+  // sprint lean + idle breathing
+  m.group.rotation.x = (sprint && player.moveAmount > 0.6 && player.grounded) ? 0.1 : 0;
+  m.head.position.y = 2.15 + (player.moveAmount < 0.15 ? Math.sin(game.time * 1.6) * 0.02 : 0);
   m.group.position.y += Math.abs(Math.cos(player.walkPhase)) * 0.07 * player.moveAmount;
   player.recoil = Math.max(0, player.recoil - dt * 9);
   m.armR.rotation.x = -Math.PI / 2 + player.pitch * 0.8 - player.recoil * 0.55;
   m.head.rotation.x = -player.pitch * 0.45;
-  if (player.reloading) m.armL.rotation.x = -1.2 + Math.sin(game.time * 14) * 0.25;
+  if (player.reloading) {
+    m.armL.rotation.x = -1.2 + Math.sin(game.time * 14) * 0.25;
+    m.elbowL.rotation.x = -0.7;
+  }
 
   // first-person viewmodel bob + recoil kick
   fpRig.position.set(
@@ -2066,18 +2326,36 @@ function buildSniperMesh() {
   eye.position.set(0, 1.95, 0.5); g.add(eye);
   return { group: g, bodyMat, legs: null };
 }
-// round bomb-bot that pulses faster the closer it gets
+// round bomb-bot (key-art style): faceted shell, big red eye panel,
+// yellow beacon lights, antenna — pulses faster the closer it gets
 function buildExploderMesh() {
   const g = new THREE.Group();
-  const bodyMat = mat(PAL.orange, { emissive: 0xff2a3c, emissiveIntensity: 0.3 });
-  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), bodyMat);
-  body.position.y = 0.7; body.castShadow = true; g.add(body);
-  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), MAT.redGlow);
-  core.position.y = 0.7; core.scale.z = 1.4; g.add(core);
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.2), mat(PAL.grayDark));
-  legL.position.set(-0.3, 0.25, 0); g.add(legL);
-  const legR = legL.clone(); legR.position.x = 0.3; g.add(legR);
-  return { group: g, bodyMat, legs: [legL, legR] };
+  const bodyMat = mat(0x5a5468, { emissive: 0xff2a3c, emissiveIntensity: 0.25 });
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 0), bodyMat);
+  body.position.y = 0.78; body.castShadow = true; g.add(body);
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.1, 8), mat(0x241f2e));
+  plate.rotation.x = Math.PI / 2; plate.position.set(0, 0.78, 0.52); g.add(plate);
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.12, 8), MAT.redGlow);
+  core.rotation.x = Math.PI / 2; core.position.set(0, 0.78, 0.56); g.add(core);
+  for (const sd of [-1, 1]) {
+    const w = new THREE.Mesh(new THREE.OctahedronGeometry(0.06, 0), MAT.redGlow);
+    w.position.set(sd * 0.32, 0.58, 0.46); g.add(w);
+    const b = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.16, 6), MAT.windowGlow);
+    b.position.set(sd * 0.3, 1.32, 0); g.add(b);
+  }
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, 0.12, 8), mat(0x3a3444));
+  cap.position.y = 1.28; g.add(cap);
+  const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.5, 4), mat(0x241f2e));
+  ant.position.y = 1.56; g.add(ant);
+  const antTip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.07), MAT.windowGlow);
+  antTip.position.y = 1.82; g.add(antTip);
+  const legs = [];
+  for (const [lx, lz] of [[-0.3, 0.25], [0.3, 0.25], [-0.3, -0.25], [0.3, -0.25]]) {
+    const leg = new THREE.Mesh(new THREE.DodecahedronGeometry(0.14, 0), mat(0x241f2e));
+    leg.position.set(lx, 0.14, lz); g.add(leg);
+    legs.push(leg);
+  }
+  return { group: g, bodyMat, legs: [legs[0], legs[1]] };
 }
 function spawnEnemy(type, x, z) {
   const T = ETYPES[type];
@@ -3620,8 +3898,12 @@ function updateRemotePlayers(dt) {
     const s = Math.sin(r.phase), amp = 0.5 * r.mv;
     r.mesh.legL.rotation.x = s * amp;
     r.mesh.legR.rotation.x = -s * amp;
+    r.mesh.kneeL.rotation.x = Math.max(0, -s) * amp * 1.15;
+    r.mesh.kneeR.rotation.x = Math.max(0, s) * amp * 1.15;
     r.mesh.armL.rotation.x = -s * amp * 0.8;
+    r.mesh.elbowL.rotation.x = -Math.max(0, s) * amp * 0.5 - 0.08;
     r.mesh.armR.rotation.x = -Math.PI / 2.4;
+    r.mesh.elbowR.rotation.x = -0.3;
     r.mesh.gunMeshes.forEach((gm, k) => gm.visible = k === (r.wp || 0));
   }
 }
@@ -3686,6 +3968,7 @@ Net.on('s', msg => {
 Net.on('fire', msg => {
   spawnTracer(new THREE.Vector3(msg.a[0], msg.a[1], msg.a[2]),
               new THREE.Vector3(msg.b[0], msg.b[1], msg.b[2]), msg.c);
+  SFX.remoteFire();
 });
 Net.on('_close', () => {
   for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id);
