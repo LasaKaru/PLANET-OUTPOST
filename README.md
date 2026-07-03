@@ -1,4 +1,4 @@
-# HELAO2: Low Poly Wilds
+# HELAO2: Planet Outpost
 
 A low-poly sci-fi adventure shooter on a vibrant alien planet — exploration,
 missions, base-building, wildlife scanning, secrets, and **co-op multiplayer**.
@@ -33,6 +33,7 @@ Enemies, missions, and loot are simulated per player.
 | R | Reload |
 | Space / Shift | Jump / Sprint |
 | B | Build mode (1–8 select, scroll rotates) |
+| V | Toggle first-person / third-person camera |
 | E | Interact (camper, pylons, bridge, cache) |
 | Q | Scan wildlife |
 | Tab / J | Field journal (missions, upgrades, lore) |

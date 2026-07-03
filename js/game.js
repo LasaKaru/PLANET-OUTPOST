@@ -50,6 +50,7 @@ const $ = id => document.getElementById(id);
 /* ======================= SETTINGS (persisted) ====================== */
 const settings = Object.assign({
   master: 70, sfx: 80, music: 55, sens: 100, invertY: false, quality: 1,
+  spawn: 0, fpDefault: false,
 }, JSON.parse(localStorage.getItem(SET_KEY) || '{}'));
 function saveSettings() { localStorage.setItem(SET_KEY, JSON.stringify(settings)); }
 // per-quality tuning: [fogNear, fogFar, cameraFar, grassCount, shadowSize, pixelCap]
@@ -169,6 +170,7 @@ const SFX = (() => {
     powerup() { tone('sawtooth', 110, 440, 0.6, 0.2); setTimeout(() => tone('sine', 660, 1320, 0.4, 0.18), 500); },
     click()   { tone('triangle', 700, 500, 0.05, 0.12); },
     hover()   { tone('triangle', 900, 800, 0.03, 0.05); },
+    water()   { noise(0.9, 0.09, 950, 0.4); },
     step()    { noise(0.07, 0.09, 480 + srand() * 160); },
     land()    { noise(0.12, 0.2, 350); tone('sine', 140, 70, 0.1, 0.12); },
     chirp() {
@@ -1204,6 +1206,228 @@ document.addEventListener('mouseover', e => {
     SFX.hover();
 });
 
+/* =====================================================================
+   WATER PASS — flowing canal in the ravine, scenic waterfalls with
+   spray, drifting foam, ponds and extra crossings. Flow animation via
+   scrolling canvas foam textures; spray via cycling point clouds.
+   ===================================================================== */
+function waterLevelAt(x) { return terrainHeight(x, ravineCenter(x)) + 1.5; }
+
+// streaky white-on-transparent texture used by falls & canal foam
+function makeFoamTexture(vertical) {
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 128;
+  const cx = cv.getContext('2d');
+  cx.clearRect(0, 0, 128, 128);
+  for (let i = 0; i < 26; i++) {
+    cx.fillStyle = 'rgba(255,255,255,' + rand(0.25, 0.85) + ')';
+    const len = rand(14, 48), thick = rand(1.5, 4);
+    if (vertical) cx.fillRect(rand(0, 128), rand(0, 128), thick, len);
+    else cx.fillRect(rand(0, 128), rand(0, 128), len, thick);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+const waterMat = new THREE.MeshStandardMaterial({
+  color: 0x3fa8c8, transparent: true, opacity: 0.82,
+  roughness: 0.35, metalness: 0.1, flatShading: true,
+});
+
+/* ---- canal water ribbon following the ravine, with flowing foam ---- */
+(function canalWater() {
+  const steps = 90, half = WORLD_SIZE / 2 - 4;
+  const verts = [], uvs = [], idx = [];
+  for (let i = 0; i <= steps; i++) {
+    const x = -half + (i / steps) * half * 2;
+    const cz = ravineCenter(x);
+    const y = waterLevelAt(x);
+    verts.push(x, y, cz - 3.6, x, y, cz + 3.6);
+    uvs.push(i / steps * 14, 0, i / steps * 14, 1);
+    if (i > 0) {
+      const k = i * 2;
+      idx.push(k - 2, k - 1, k, k - 1, k + 1, k);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const water = new THREE.Mesh(geo, waterMat);
+  scene.add(water);
+  // drifting foam layer just above the surface
+  const foamTex = makeFoamTexture(false);
+  foamTex.repeat.set(14, 1);
+  const foam = new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({
+    map: foamTex, transparent: true, opacity: 0.5, depthWrite: false }));
+  foam.position.y = 0.06;
+  scene.add(foam);
+  envAnims.push(dt => { foamTex.offset.x -= dt * 0.12; });   // gentle flow
+})();
+
+/* ---- waterfall builder: cliff + animated falls + pond + spray ---- */
+const waterfalls = [];   // positions, for ambient sound
+function makeWaterfall(x, z, ry, height = 8, intoCanal = false) {
+  const g = new THREE.Group();
+  // cliff face of stacked rocks
+  for (let i = 0; i < 7; i++) {
+    const r = new THREE.Mesh(new THREE.DodecahedronGeometry(rand(1.8, 3.2), 0), MAT.rock);
+    r.position.set(rand(-3.4, 3.4), rand(0.5, height + 1), rand(-1.6, -0.4));
+    r.scale.y = rand(0.7, 1.3);
+    r.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3));
+    r.castShadow = true;
+    g.add(r);
+  }
+  // falling water sheet with downward-scrolling streaks
+  const fallTex = makeFoamTexture(true);
+  fallTex.repeat.set(2, 3);
+  const sheet = new THREE.Mesh(new THREE.PlaneGeometry(3.4, height),
+    new THREE.MeshStandardMaterial({ color: 0x9fdce8, transparent: true, opacity: 0.85,
+      roughness: 0.3, side: THREE.DoubleSide, map: fallTex, emissive: 0x4a8898, emissiveIntensity: 0.3 }));
+  sheet.position.set(0, height / 2 + 0.3, 0.15);
+  sheet.rotation.x = -0.06;
+  g.add(sheet);
+  envAnims.push(dt => { fallTex.offset.y -= dt * 0.9; });
+  // pond at the base (skip when pouring straight into the canal)
+  if (!intoCanal) {
+    const pond = new THREE.Mesh(new THREE.CylinderGeometry(4.4, 4.4, 0.25, 10), waterMat);
+    pond.position.set(0, 0.2, 2.4);
+    g.add(pond);
+    const rim = [];
+    for (let i = 0; i < 8; i++) {
+      const r = new THREE.Mesh(new THREE.DodecahedronGeometry(rand(0.5, 1.1), 0), MAT.rockPink);
+      const a = rand(0, Math.PI * 2);
+      r.position.set(Math.cos(a) * 4.5, 0.3, 2.4 + Math.sin(a) * 4.5);
+      g.add(r); rim.push(r);
+    }
+  }
+  // white spray points cycling at the impact zone
+  const N = 34, pos = new Float32Array(N * 3), life = new Float32Array(N);
+  for (let i = 0; i < N; i++) life[i] = rand(0, 1);
+  const sprayGeo = new THREE.BufferGeometry();
+  sprayGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const spray = new THREE.Points(sprayGeo, new THREE.PointsMaterial({
+    color: 0xffffff, size: 0.34, transparent: true, opacity: 0.85, depthWrite: false }));
+  g.add(spray);
+  envAnims.push(dt => {
+    for (let i = 0; i < N; i++) {
+      life[i] += dt * rand(0.8, 1.4);
+      if (life[i] > 1) { life[i] = 0; }
+      const t = life[i], a = (i / N) * Math.PI * 2;
+      pos[i*3]   = Math.cos(a) * t * 2.2;
+      pos[i*3+1] = 0.4 + Math.sin(t * Math.PI) * 1.6;
+      pos[i*3+2] = 1.2 + Math.sin(a) * t * 2.0;
+    }
+    sprayGeo.attributes.position.needsUpdate = true;
+  });
+  const gy = intoCanal ? waterLevelAt(x) - 1.3 : terrainHeight(x, z);
+  g.position.set(x, gy, z);
+  g.rotation.y = ry;
+  scene.add(g);
+  circleColliders.push({ x, z: z, r: 3.5 });
+  g.traverse(o => { if (o.isMesh && o.geometry.type !== 'PlaneGeometry') { cameraBlockers.push(o); } });
+  waterfalls.push({ x, z });
+  return g;
+}
+// western source pouring into the canal + two scenic falls with ponds
+makeWaterfall(-133, ravineCenter(-133), Math.PI / 2, 9, true);
+makeWaterfall(-52, -58, 0.3, 8);
+makeWaterfall(104, 58, -2.2, 7);
+
+/* ---- third canal crossing + stepping stones ---- */
+buildBridgePrefab(90, ravineCenter(90));
+(function steppingStones() {
+  const x0 = -20, cz = ravineCenter(-20);
+  for (let i = 0; i < 4; i++) {
+    const z = cz - 6 + i * 4;
+    const s = new THREE.Mesh(new THREE.DodecahedronGeometry(1.1, 0), MAT.rock);
+    s.scale.y = 0.5;
+    s.position.set(x0 + rand(-0.8, 0.8), waterLevelAt(x0) + 0.15, z);
+    s.castShadow = true;
+    scene.add(s);
+    addPlatform(s.position.x, z, 1.8, 1.8, s.position.y + 0.45);
+  }
+})();
+
+/* ---- ambient waterfall rush when the player is close ---- */
+let waterSndT = 0;
+envAnims.push(dt => {
+  waterSndT -= dt;
+  if (waterSndT > 0 || game.state !== 'playing') return;
+  waterSndT = 0.75;
+  for (const w of waterfalls) {
+    if (Math.hypot(player.pos.x - w.x, player.pos.z - w.z) < 22) { SFX.water(); break; }
+  }
+});
+
+/* ==================== WEAPON MODELS ================================ */
+// Shared by the third-person rig, the first-person viewmodel, and
+// remote co-op players.
+const flashMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true,
+  opacity: 0.95, side: THREE.DoubleSide, depthWrite: false });
+const gunMats = { body: mat(0x2a7f74), dark: mat(0x3a3f4a), trim: mat(PAL.orange) };
+function makeFlash(z) {
+  const f = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
+  f.position.set(0, 0.05, z); f.visible = false;
+  return f;
+}
+function gunPistol() {
+  const gg = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 0.6), gunMats.body); gg.add(b);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.26, 0.14), gunMats.trim);
+  grip.position.set(0, -0.2, -0.12); gg.add(grip);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.16), MAT.cyanGlow);
+  cell.position.set(0, 0.13, 0); gg.add(cell);
+  gg.userData.flashZ = 0.55;
+  return gg;
+}
+function gunRifle() {
+  const gg = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 1.05), gunMats.body); gg.add(b);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.5), gunMats.dark);
+  barrel.position.set(0, 0.05, 0.72); gg.add(barrel);
+  const magz = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.3, 0.16), gunMats.dark);
+  magz.position.set(0, -0.24, 0.1); gg.add(magz);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.2), MAT.cyanGlow);
+  cell.position.set(0, 0.14, 0.05); gg.add(cell);
+  gg.userData.flashZ = 1.0;
+  return gg;
+}
+function gunShotgun() {
+  const gg = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.24, 0.9), mat(PAL.mustard)); gg.add(b);
+  const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.7), gunMats.dark);
+  b2.position.set(0, -0.14, 0.15); gg.add(b2);
+  const pump = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 0.3), gunMats.trim);
+  pump.position.set(0, -0.13, 0.45); gg.add(pump);
+  gg.userData.flashZ = 0.75;
+  return gg;
+}
+function gunSniper() {
+  const gg = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 1.5), mat(PAL.techBlue)); gg.add(b);
+  const scopeM = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 6), gunMats.dark);
+  scopeM.rotation.x = Math.PI / 2; scopeM.position.set(0, 0.17, 0.1); gg.add(scopeM);
+  const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.32), MAT.cyanGlow);
+  cell.position.set(0, 0.07, -0.4); gg.add(cell);
+  gg.userData.flashZ = 1.35;
+  return gg;
+}
+// builds the 4 weapon meshes + their muzzle flashes, untransformed
+function makeGunSet() {
+  const gunMeshes = [gunPistol(), gunRifle(), gunShotgun(), gunSniper()];
+  const flashes = [];
+  gunMeshes.forEach(gm => {
+    const f1 = makeFlash(gm.userData.flashZ), f2 = makeFlash(gm.userData.flashZ);
+    f2.rotation.z = Math.PI / 4;
+    gm.add(f1); gm.add(f2);
+    flashes.push([f1, f2]);
+    gm.visible = false;
+  });
+  return { gunMeshes, flashes };
+}
+
 /* ====================== PLAYER CHARACTER =========================== */
 // Also used for remote co-op players (each gets a different suit color)
 function buildPlayerMesh(suitColor = PAL.teal, trimColor = PAL.orange) {
@@ -1253,67 +1477,10 @@ function buildPlayerMesh(suitColor = PAL.teal, trimColor = PAL.orange) {
   }
   const legL = leg(-1), legR = leg(1);
 
-  /* ---- four distinct weapon models, toggled by visibility ---- */
-  const flashMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true,
-    opacity: 0.95, side: THREE.DoubleSide, depthWrite: false });
-  const gunMats = { body: mat(0x2a7f74), dark, trim };
-  function makeFlash(z) {
-    const f = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
-    f.position.set(0, 0.05, z); f.visible = false;
-    return f;
-  }
-  function gunPistol() {
-    const gg = new THREE.Group();
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 0.6), gunMats.body); gg.add(b);
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.26, 0.14), gunMats.trim);
-    grip.position.set(0, -0.2, -0.12); gg.add(grip);
-    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.16), MAT.cyanGlow);
-    cell.position.set(0, 0.13, 0); gg.add(cell);
-    gg.userData.flashZ = 0.55;
-    return gg;
-  }
-  function gunRifle() {
-    const gg = new THREE.Group();
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 1.05), gunMats.body); gg.add(b);
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.5), gunMats.dark);
-    barrel.position.set(0, 0.05, 0.72); gg.add(barrel);
-    const magz = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.3, 0.16), gunMats.dark);
-    magz.position.set(0, -0.24, 0.1); gg.add(magz);
-    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.2), MAT.cyanGlow);
-    cell.position.set(0, 0.14, 0.05); gg.add(cell);
-    gg.userData.flashZ = 1.0;
-    return gg;
-  }
-  function gunShotgun() {
-    const gg = new THREE.Group();
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.24, 0.9), mat(PAL.mustard)); gg.add(b);
-    const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.7), gunMats.dark);
-    b2.position.set(0, -0.14, 0.15); gg.add(b2);
-    const pump = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 0.3), gunMats.trim);
-    pump.position.set(0, -0.13, 0.45); gg.add(pump);
-    gg.userData.flashZ = 0.75;
-    return gg;
-  }
-  function gunSniper() {
-    const gg = new THREE.Group();
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.2, 1.5), mat(PAL.techBlue)); gg.add(b);
-    const scopeM = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 6), gunMats.dark);
-    scopeM.rotation.x = Math.PI / 2; scopeM.position.set(0, 0.17, 0.1); gg.add(scopeM);
-    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.32), MAT.cyanGlow);
-    cell.position.set(0, 0.07, -0.4); gg.add(cell);
-    gg.userData.flashZ = 1.35;
-    return gg;
-  }
-  const gunMeshes = [gunPistol(), gunRifle(), gunShotgun(), gunSniper()];
-  const flashes = [];
+  const { gunMeshes, flashes } = makeGunSet();
   gunMeshes.forEach(gm => {
-    const f1 = makeFlash(gm.userData.flashZ), f2 = makeFlash(gm.userData.flashZ);
-    f2.rotation.z = Math.PI / 4;
-    gm.add(f1); gm.add(f2);
-    flashes.push([f1, f2]);
     gm.position.set(0, -1.0, 0.28);
     gm.rotation.x = Math.PI / 2;   // align barrel with the raised arm's forward axis
-    gm.visible = false;
     armR.add(gm);
   });
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
@@ -1343,6 +1510,40 @@ const player = {
   upgrades: { vit: 0, dmg: 0, spd: 0, mag: 0, bld: 0 },
 };
 scene.add(player.mesh.group);
+
+/* ============ FIRST-PERSON VIEWMODEL & CAMERA MODES ================ */
+// The FP rig (arm + current weapon) is parented to the camera so it
+// stays glued to the view; toggled with V, default set in Settings.
+scene.add(camera);
+const fpRig = new THREE.Group();
+const fpSet = makeGunSet();
+const fpFlashes = fpSet.flashes;
+fpSet.gunMeshes.forEach(gm => { gm.rotation.y = Math.PI; fpRig.add(gm); });
+const fpArm = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.55), mat(PAL.teal));
+fpArm.position.set(0.1, -0.15, 0.28); fpArm.rotation.x = 0.35;
+fpRig.add(fpArm);
+fpRig.position.set(0.38, -0.34, -0.7);
+fpRig.scale.setScalar(0.8);
+fpRig.visible = false;
+camera.add(fpRig);
+
+let camMode = 'tp';
+function setCamMode(m) {
+  camMode = m;
+  player.mesh.group.visible = m === 'tp';
+  fpRig.visible = m === 'fp';
+  $('cam-ind').textContent = m === 'fp' ? '◑ 1ST PERSON' : '◐ 3RD PERSON';
+}
+function toggleCamMode() { setCamMode(camMode === 'fp' ? 'tp' : 'fp'); SFX.click(); }
+function syncGunVisibility() {
+  player.mesh.gunMeshes.forEach((g, k) => g.visible = k === player.cur);
+  fpSet.gunMeshes.forEach((g, k) => g.visible = k === player.cur);
+}
+function hideMuzzleFlashes() {
+  player.mesh.flashes[player.cur].forEach(f => f.visible = false);
+  fpFlashes[player.cur].forEach(f => f.visible = false);
+}
+
 function curWeapon() { return WEAPONS[player.cur]; }
 function curWState() { return player.weapons[player.cur]; }
 function magSizeOf(i) { return Math.ceil(WEAPONS[i].mag * (player.upgrades.mag ? 1.5 : 1)); }
@@ -1353,7 +1554,7 @@ function costMult() { return player.upgrades.bld ? 0.75 : 1; }
 function switchWeapon(i) {
   if (i === player.cur || !player.weapons[i] || !player.weapons[i].unlocked) return;
   player.cur = i; player.reloading = false;
-  player.mesh.gunMeshes.forEach((gm, k) => gm.visible = k === i);
+  syncGunVisibility();
   SFX.click();
   updateAmmoUI(); updateWeaponSlotsUI();
 }
@@ -1386,6 +1587,7 @@ document.addEventListener('keydown', e => {
     if (e.code === 'KeyB') toggleBuildMode();
     if (e.code === 'KeyE') tryInteract();
     if (e.code === 'KeyQ') tryScan();
+    if (e.code === 'KeyV') toggleCamMode();
     if (e.code === 'Tab' || e.code === 'KeyJ') openJournal();
     if (buildMode) {
       for (let i = 0; i < 8; i++) if (e.code === 'Digit' + (i + 1)) selectBuild(i);
@@ -1415,8 +1617,9 @@ document.addEventListener('mousemove', e => {
   else return;
   const s = 0.0024 * (settings.sens / 100);
   player.yaw -= dx * s;
-  player.pitch += (settings.invertY ? dy : -dy) * s * 0.92;
-  player.pitch = clamp(player.pitch, -0.9, 0.55);
+  // pitch decreases = aim up (mouse up aims up unless inverted)
+  player.pitch += (settings.invertY ? -dy : dy) * s * 0.92;
+  player.pitch = clamp(player.pitch, -0.6, 0.9);
 });
 document.addEventListener('wheel', e => {
   if (game.state !== 'playing') return;
@@ -1438,6 +1641,16 @@ document.addEventListener('pointerlockchange', () => {
 /* ==================== THIRD-PERSON CAMERA ========================== */
 const camRay = new THREE.Raycaster();
 function updateCamera(dt) {
+  if (camMode === 'fp') {
+    // first-person: camera sits at helmet height, no smoothing lag
+    const head = player.pos.clone().add(new THREE.Vector3(0, 2.02, 0));
+    camera.position.copy(head);
+    camera.lookAt(head.clone().add(new THREE.Vector3(
+      Math.sin(player.yaw) * Math.cos(player.pitch),
+      -Math.sin(player.pitch),
+      Math.cos(player.yaw) * Math.cos(player.pitch))));
+    return;
+  }
   const target = player.pos.clone().add(new THREE.Vector3(0, 2.1, 0));
   const dist = 5.6;
   const off = new THREE.Vector3(
@@ -1472,6 +1685,9 @@ function updatePlayer(dt) {
   if (keys['KeyD']) move.add(right);
   const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
   let speed = PLAYER_SPEED * speedMult() * (sprint ? SPRINT_MULT : 1);
+  // wading through the canal is slow going
+  if (inRavine(player.pos.x, player.pos.z) && player.pos.y < waterLevelAt(player.pos.x) + 0.2)
+    speed *= 0.55;
   if (move.lengthSq() > 0) move.normalize();
   player.moveAmount += ((move.lengthSq() > 0 ? (sprint ? 1.5 : 1) : 0) - player.moveAmount) * Math.min(dt * 10, 1);
 
@@ -1512,6 +1728,19 @@ function updatePlayer(dt) {
   m.head.rotation.x = -player.pitch * 0.45;
   if (player.reloading) m.armL.rotation.x = -1.2 + Math.sin(game.time * 14) * 0.25;
 
+  // first-person viewmodel bob + recoil kick
+  fpRig.position.set(
+    0.38 + Math.sin(player.walkPhase * 0.5) * 0.015 * player.moveAmount,
+    -0.34 + Math.abs(Math.cos(player.walkPhase)) * 0.03 * player.moveAmount,
+    -0.7 + player.recoil * 0.1);
+  fpRig.rotation.x = player.recoil * 0.07;
+
+  // wading through the canal slows you down and splashes
+  if (inRavine(player.pos.x, player.pos.z) && player.pos.y < waterLevelAt(player.pos.x) + 0.2) {
+    if (player.moveAmount > 0.4 && srand() < dt * 4)
+      emit(player.pos.clone().add(new THREE.Vector3(0, 0.3, 0)), 0xbfe8f0, 3, 2.5, 0.4, 0.6, 0.6);
+  }
+
   if (mouseDown && !buildMode && (curWeapon().auto || !shotLatch)) tryShoot();
   if (!mouseDown) shotLatch = false;
 
@@ -1542,7 +1771,7 @@ function startReload() {
 }
 function gunTipWorld() {
   const v = new THREE.Vector3();
-  player.mesh.flashes[player.cur][0].getWorldPosition(v);
+  (camMode === 'fp' ? fpFlashes : player.mesh.flashes)[player.cur][0].getWorldPosition(v);
   return v;
 }
 function tryShoot() {
@@ -1556,7 +1785,8 @@ function tryShoot() {
   fireCd = w.interval;
   ws.mag--; updateAmmoUI();
   player.recoil = w.recoil; flashT = 0.05;
-  player.mesh.flashes[player.cur].forEach(f => { f.visible = true; f.rotation.z = rand(0, Math.PI); });
+  player.mesh.flashes[player.cur].concat(fpFlashes[player.cur])
+    .forEach(f => { f.visible = true; f.rotation.z = rand(0, Math.PI); });
   SFX[w.snd]();
   noise.x = player.pos.x; noise.z = player.pos.z; noise.t = game.time;
 
@@ -1762,10 +1992,12 @@ function damagePlayer(dmg) {
 const enemies = [];
 const losRay = new THREE.Raycaster();
 const ETYPES = {
-  stalker: { hp: 60,  speed: 3.6, detectR: 26, attackR: 19, dmg: 9,  fireA: 1.0, fireB: 1.7, ranged: true,  drop: [3, 2] },
-  scout:   { hp: 30,  speed: 6.8, detectR: 30, attackR: 2.4, dmg: 8, ranged: false, drop: [2, 1] },
-  heavy:   { hp: 170, speed: 2.4, detectR: 24, attackR: 22, dmg: 16, fireA: 1.8, fireB: 2.3, ranged: true, drop: [6, 4] },
-  wasp:    { hp: 40,  speed: 6.0, detectR: 28, attackR: 16, dmg: 8,  fireA: 1.1, fireB: 1.6, ranged: true, fly: true, drop: [2, 3] },
+  stalker:  { hp: 60,  speed: 3.6, detectR: 26, attackR: 19, dmg: 9,  fireA: 1.0, fireB: 1.7, ranged: true,  drop: [3, 2] },
+  scout:    { hp: 30,  speed: 6.8, detectR: 30, attackR: 2.4, dmg: 8, ranged: false, drop: [2, 1] },
+  heavy:    { hp: 170, speed: 2.4, detectR: 24, attackR: 22, dmg: 16, fireA: 1.8, fireB: 2.3, ranged: true, drop: [6, 4] },
+  wasp:     { hp: 40,  speed: 6.0, detectR: 28, attackR: 16, dmg: 8,  fireA: 1.1, fireB: 1.6, ranged: true, fly: true, drop: [2, 3] },
+  sniper:   { hp: 50,  speed: 2.8, detectR: 46, attackR: 44, dmg: 26, ranged: true, sniper: true, drop: [4, 3] },
+  exploder: { hp: 25,  speed: 7.4, detectR: 32, attackR: 2.4, dmg: 26, ranged: false, exploder: true, drop: [2, 2] },
 };
 function buildStalkerMesh(scale = 1, heavy = false) {
   const g = new THREE.Group();
@@ -1815,10 +2047,44 @@ function buildWaspMesh() {
   }
   return { group: g, bodyMat, rotors };
 }
+// tall tripod marksman with a long rail barrel
+function buildSniperMesh() {
+  const g = new THREE.Group();
+  const bodyMat = mat(PAL.techBlue);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.7, 0.9), bodyMat);
+  body.position.y = 1.8; body.castShadow = true; g.add(body);
+  for (let i = 0; i < 3; i++) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.12), mat(PAL.grayDark));
+    const a = i * Math.PI * 2 / 3;
+    leg.position.set(Math.cos(a) * 0.55, 0.9, Math.sin(a) * 0.55);
+    leg.rotation.z = Math.cos(a) * 0.3; leg.rotation.x = -Math.sin(a) * 0.3;
+    g.add(leg);
+  }
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 2.0), mat(PAL.grayDark));
+  barrel.position.set(0, 1.95, 0.9); g.add(barrel);
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.15, 6, 4), MAT.redGlow);
+  eye.position.set(0, 1.95, 0.5); g.add(eye);
+  return { group: g, bodyMat, legs: null };
+}
+// round bomb-bot that pulses faster the closer it gets
+function buildExploderMesh() {
+  const g = new THREE.Group();
+  const bodyMat = mat(PAL.orange, { emissive: 0xff2a3c, emissiveIntensity: 0.3 });
+  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), bodyMat);
+  body.position.y = 0.7; body.castShadow = true; g.add(body);
+  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), MAT.redGlow);
+  core.position.y = 0.7; core.scale.z = 1.4; g.add(core);
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.2), mat(PAL.grayDark));
+  legL.position.set(-0.3, 0.25, 0); g.add(legL);
+  const legR = legL.clone(); legR.position.x = 0.3; g.add(legR);
+  return { group: g, bodyMat, legs: [legL, legR] };
+}
 function spawnEnemy(type, x, z) {
   const T = ETYPES[type];
   const built = type === 'wasp' ? buildWaspMesh()
     : type === 'scout' ? buildScoutMesh()
+    : type === 'sniper' ? buildSniperMesh()
+    : type === 'exploder' ? buildExploderMesh()
     : buildStalkerMesh(type === 'heavy' ? 1.45 : 1, type === 'heavy');
   const e = {
     type, T, alive: true, mesh: built.group, parts: built,
@@ -1831,6 +2097,8 @@ function spawnEnemy(type, x, z) {
     flash: 0, t: rand(0, 10),
     alerted: false, retreated: false, retreatT: 0,
     meleeCd: 0, invT: 0, buildingHitT: 0,
+    aimT: 0, laserT: 0, calledBackup: false,
+    flank: pick([-0.55, 0.55]),   // approach angle for light flanking
   };
   e.mesh.position.set(x, terrainHeight(x, z) + (T.fly ? e.flyH : 0), z);
   e.mesh.traverse(o => o.userData.enemy = e);
@@ -1839,6 +2107,40 @@ function spawnEnemy(type, x, z) {
   enemies.push(e);
   return e;
 }
+// alert an enemy — scouts additionally radio for reinforcements
+function onAlert(e) {
+  alertNearby(e);
+  if (!e.alerted) { e.alerted = true; SFX.alert(); }
+  if (e.type === 'scout' && !e.calledBackup) {
+    e.calledBackup = true;
+    showToast('⚠ A scout drone is calling for backup!');
+    const sp = e.mesh.position.clone();
+    setTimeout(() => {
+      if (game.state !== 'playing' || !e.alive) return;
+      if (enemies.filter(x => x.alive).length >= 16) return;
+      for (let i = 0; i < 2; i++) {
+        const a = rand(0, Math.PI * 2);
+        const ne = spawnEnemy(pick(['stalker', 'exploder']),
+          clamp(sp.x + Math.cos(a) * 18, -130, 130),
+          clamp(sp.z + Math.sin(a) * 18, -130, 130));
+        ne.state = 'chase'; ne.alerted = true;
+      }
+      SFX.alert();
+    }, 1500);
+  }
+}
+// exploder blast: hurts the player, remote players' worlds, and buildings
+function explodeAt(pos, radius, dmg) {
+  SFX.explode();
+  emit(pos, 0xff8a3c, 16, 8, 0.7, 1.6);
+  emit(pos, 0xff2a3c, 10, 10, 0.5, 1.0);
+  const d = pos.distanceTo(player.pos.clone().add(new THREE.Vector3(0, 1, 0)));
+  if (d < radius) damagePlayer(Math.round(dmg * (1 - d / radius * 0.6)));
+  for (const b of buildings) {
+    if (!b.alive) continue;
+    if (b.mesh.position.distanceTo(pos) < radius + 1.5) damageBuilding(b, dmg);
+  }
+}
 function damageEnemy(e, dmg) {
   if (!e.alive) return;
   e.hp -= dmg;
@@ -1846,8 +2148,7 @@ function damageEnemy(e, dmg) {
   SFX.hit();
   if (e.state === 'patrol' || e.state === 'investigate') {
     e.state = 'chase';
-    alertNearby(e);
-    if (!e.alerted) { e.alerted = true; SFX.alert(); }
+    onAlert(e);
   }
   // wounded non-heavies fall back once
   if (e.hp > 0 && e.hp < e.maxHp * 0.25 && !e.retreated && e.type !== 'heavy') {
@@ -1868,6 +2169,7 @@ function killEnemy(e) {
   e.alive = false;
   scene.remove(e.mesh);
   SFX.explode();
+  if (e.type === 'exploder') explodeAt(e.mesh.position.clone(), 3.5, 14);   // dies loudly
   const p = e.mesh.position;
   emit(p, 0xff8a3c, 14, 7, 0.8, 1.4);
   emit(p, 0x3a4048, 10, 5, 1.1, 1.2);
@@ -1910,7 +2212,7 @@ function updateEnemies(dt) {
     }
 
     if (e.state === 'patrol') {
-      if (seesPlayer) { e.state = 'chase'; alertNearby(e); if (!e.alerted) { e.alerted = true; SFX.alert(); } }
+      if (seesPlayer) { e.state = 'chase'; onAlert(e); }
       else {
         moveEnemyToward(e, e.wp, e.speed * 0.5, dt);
         if (m.position.distanceTo(new THREE.Vector3(e.wp.x, m.position.y, e.wp.z)) < 1.5)
@@ -1918,7 +2220,7 @@ function updateEnemies(dt) {
       }
     } else if (e.state === 'investigate') {
       e.invT -= dt;
-      if (seesPlayer) { e.state = 'chase'; alertNearby(e); if (!e.alerted) { e.alerted = true; SFX.alert(); } }
+      if (seesPlayer) { e.state = 'chase'; onAlert(e); }
       else {
         moveEnemyToward(e, e.wp, e.speed * 0.8, dt);
         if (e.invT <= 0 || m.position.distanceTo(new THREE.Vector3(e.wp.x, m.position.y, e.wp.z)) < 2)
@@ -1933,11 +2235,41 @@ function updateEnemies(dt) {
     } else if (e.state === 'chase') {
       if (distToPlayer < e.T.attackR && (seesPlayer || !e.T.ranged)) e.state = 'attack';
       else if (distToPlayer > e.T.detectR * 1.8) e.state = 'patrol';
-      else moveEnemyToward(e, pPos, e.speed, dt);
+      // approach at an angle while far → light flanking behavior
+      else moveEnemyToward(e, pPos, e.speed, dt, false,
+        distToPlayer > e.T.attackR * 1.6 ? e.flank : 0);
     } else if (e.state === 'attack') {
       if (distToPlayer > e.T.attackR * 1.2 || (e.T.ranged && !seesPlayer)) e.state = 'chase';
       m.rotation.y = Math.atan2(pPos.x - m.position.x, pPos.z - m.position.z);
-      if (e.T.ranged) {
+      if (e.T.sniper) {
+        // marksman: keep range, telegraph with a thin laser, heavy shot
+        if (distToPlayer < 24) {
+          const away = m.position.clone().sub(pPos); away.y = 0;
+          moveEnemyToward(e, m.position.clone().add(away.normalize().multiplyScalar(6)), e.speed, dt);
+          m.rotation.y = Math.atan2(pPos.x - m.position.x, pPos.z - m.position.z);
+        }
+        if (e.fireCd > 0) { e.fireCd -= dt; e.aimT = 0; }
+        else if (seesPlayer) {
+          e.aimT += dt;
+          e.laserT -= dt;
+          const eye = m.position.clone().add(new THREE.Vector3(0, 1.95, 0));
+          const chest = pPos.clone().add(new THREE.Vector3(0, 1.4, 0));
+          if (e.laserT <= 0) { e.laserT = 0.12; spawnTracer(eye, chest, 0xff2a3c); }
+          if (e.aimT > 1.6) {
+            e.aimT = 0; e.fireCd = 2.6;
+            enemyShoot(eye, chest, 55, e.T.dmg);
+            SFX.fireSniper();
+          }
+        } else e.aimT = 0;
+      } else if (e.T.exploder) {
+        // bomb-bot: rush in and detonate on contact
+        moveEnemyToward(e, pPos, e.speed, dt);
+        if (distToPlayer < 2.4) {
+          e.alive = false;
+          scene.remove(e.mesh);
+          explodeAt(m.position.clone().add(new THREE.Vector3(0, 0.7, 0)), 4.5, e.T.dmg);
+        }
+      } else if (e.T.ranged) {
         if (e.type === 'wasp') moveEnemyToward(e, pPos, e.speed * 0.3, dt, true);
         e.fireCd -= dt;
         if (e.fireCd <= 0 && seesPlayer) {
@@ -1968,6 +2300,12 @@ function updateEnemies(dt) {
       const walk = Math.sin(e.t * 8) * 0.3;
       if (e.parts.legs) { e.parts.legs[0].rotation.x = walk; e.parts.legs[1].rotation.x = -walk; }
       m.position.y += Math.abs(Math.sin(e.t * 8)) * 0.05;
+      // exploders pulse red, faster as they close in
+      if (e.T.exploder && e.flash <= 0) {
+        const prox = clamp(1 - distToPlayer / 20, 0, 1);
+        e.parts.bodyMat.emissiveIntensity =
+          0.4 + prox * 0.5 + Math.sin(e.t * (4 + prox * 16)) * 0.35;
+      }
     }
     if (distToPlayer < 1.5 && player.hurtCd <= 0 && e.type !== 'scout') damagePlayer(6);
 
@@ -1987,12 +2325,13 @@ function updateEnemies(dt) {
     }
   }
 }
-function moveEnemyToward(e, target, speed, dt, strafe = false) {
+function moveEnemyToward(e, target, speed, dt, strafe = false, flank = 0) {
   const m = e.mesh;
   const dir = new THREE.Vector3(target.x - m.position.x, 0, target.z - m.position.z);
   if (dir.lengthSq() < 0.01) return;
   dir.normalize();
   if (strafe) dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(e.t * 0.7) > 0 ? 1.2 : -1.2);
+  else if (flank) dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), flank);
   m.position.x += dir.x * speed * dt;
   m.position.z += dir.z * speed * dt;
   const push = circleVsColliders(m.position.x, m.position.z, 0.7, m.position.y);
@@ -2009,7 +2348,7 @@ function spawnAmbientEnemy() {
   const hubDist = Math.hypot(x - CAMPER_POS.x, z - CAMPER_POS.z);
   const type = hubDist < 65
     ? pick(['stalker', 'stalker', 'wasp'])
-    : pick(['stalker', 'scout', 'scout', 'wasp', 'heavy']);
+    : pick(['stalker', 'scout', 'scout', 'wasp', 'heavy', 'sniper', 'exploder']);
   spawnEnemy(type, x, z);
 }
 
@@ -2711,7 +3050,7 @@ function tryInteract() {
         if (game.state !== 'playing') return;
         for (let i = 0; i < 8; i++) {
           const a = rand(0, Math.PI * 2), r = rand(30, 45);
-          const e = spawnEnemy(i % 3 === 0 ? 'wasp' : i % 3 === 1 ? 'scout' : 'stalker',
+          const e = spawnEnemy(i % 4 === 0 ? 'wasp' : i % 4 === 1 ? 'scout' : i % 4 === 2 ? 'exploder' : 'stalker',
             clamp(player.pos.x + Math.cos(a) * r, -130, 130),
             clamp(player.pos.z + Math.sin(a) * r, -130, 130));
           e.state = 'chase'; e.alerted = true; e.wave = true;
@@ -2782,7 +3121,7 @@ function loadGame() {
   player.health = clamp(d.health, 1, player.maxHealth);
   d.weapons.forEach((w, i) => Object.assign(player.weapons[i], w));
   player.cur = 0; switchWeapon(d.cur || 0);
-  player.mesh.gunMeshes.forEach((gm, k) => gm.visible = k === player.cur);
+  syncGunVisibility();
   for (const id in d.missions) Object.assign(missionState[id], d.missions[id]);
   defendWaveStarted = !!d.defendWaveStarted;
   (d.buildings || []).forEach(([t, x, z, r, hp]) => placeBuildAt(t, x, z, r, hp));
@@ -2959,13 +3298,14 @@ function startGame(fromSave) {
     [[-48, -20, 'stalker'], [-12, -55, 'stalker'], [-52, -48, 'stalker'],
      [4, -30, 'wasp'], [-40, 2, 'wasp'], [-16, -14, 'stalker']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
     // wilder spawns farther out
-    [[90, -40, 'scout'], [-100, -60, 'scout'], [100, 90, 'heavy'],
-     [-90, 90, 'stalker'], [60, -110, 'wasp'], [0, 120, 'scout']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
+    [[90, -40, 'scout'], [-100, -60, 'exploder'], [100, 90, 'heavy'],
+     [-90, 90, 'sniper'], [60, -110, 'wasp'], [0, 120, 'scout']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
   }
   showScreen('');
   $('hud').style.display = 'block';
   game.state = 'playing';
-  player.mesh.gunMeshes.forEach((gm, k) => gm.visible = k === player.cur);
+  syncGunVisibility();
+  setCamMode(settings.fpDefault ? 'fp' : 'tp');
   updateHealthUI(); updateAmmoUI(); updateWeaponSlotsUI(); updateCountersUI(); updateMissionTracker();
   requestLock();
   showMessage(fromSave && hasSave() ? 'Welcome back to the Wilds.' : 'Hostile drones detected near the tower!');
@@ -3013,6 +3353,7 @@ function openSettings(from) {
   $('set-music').value = settings.music;
   $('set-sens').value = settings.sens;
   $('set-inverty').checked = settings.invertY;
+  $('set-fpdefault').checked = settings.fpDefault;
   for (let i = 0; i < 3; i++) $('q-' + i).classList.toggle('sel', settings.quality === i);
 }
 $('btn-continue').addEventListener('click', () => { SFX.init(); startGame(true); });
@@ -3028,6 +3369,7 @@ $('btn-settings-back').addEventListener('click', () => {
 for (const [id, key] of [['set-master', 'master'], ['set-sfx', 'sfx'], ['set-music', 'music'], ['set-sens', 'sens']])
   $(id).addEventListener('input', e => { settings[key] = +e.target.value; SFX.applyVolumes(); saveSettings(); });
 $('set-inverty').addEventListener('change', e => { settings.invertY = e.target.checked; saveSettings(); });
+$('set-fpdefault').addEventListener('change', e => { settings.fpDefault = e.target.checked; saveSettings(); });
 for (let i = 0; i < 3; i++)
   $('q-' + i).addEventListener('click', () => {
     settings.quality = i; saveSettings(); applyQuality();
@@ -3076,7 +3418,7 @@ function animate() {
     game.time += dt;
     fireCd = Math.max(0, fireCd - dt);
     flashT -= dt;
-    if (flashT <= 0) player.mesh.flashes[player.cur].forEach(f => f.visible = false);
+    if (flashT <= 0) hideMuzzleFlashes();
 
     updatePlayer(dt);
     updateEnemies(dt);

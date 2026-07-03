@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HELAO2: Low Poly Wilds</title>
+<title>HELAO2: Planet Outpost</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -40,6 +40,7 @@
   </div>
 
   <div id="online-ind" class="panel">◉ SOLO</div>
+  <div id="cam-ind" class="panel">◐ 3RD PERSON</div>
 
   <div id="mission-tracker" class="panel">
     <div id="mission-tag">Mission</div>
@@ -82,6 +83,7 @@
   <div id="splash-inner">
     <div id="splash-logo">HELA<span>O2</span></div>
     <div id="splash-sub">Studio Presents</div>
+    <div id="splash-title">PLANET OUTPOST</div>
   </div>
   <div id="splash-skip">CLICK TO SKIP</div>
 </div>
@@ -89,9 +91,9 @@
 <!-- ==================== MAIN MENU (VERDANT style) ==================== -->
 <div id="menu-screen" class="screen">
   <div id="menu-logo">W</div>
-  <div id="menu-title">LOW POLY WILDS</div>
+  <div id="menu-title">PLANET OUTPOST</div>
   <div id="menu-studio">helao2 studio</div>
-  <div id="menu-modes">ALIEN WILDS · SURVIVAL · CO-OP</div>
+  <div id="menu-modes">LOW POLY WILDS · SURVIVAL · CO-OP</div>
   <div class="menu-btns">
     <button class="vbtn primary" id="btn-new"><span>▶</span> START EXPEDITION</button>
     <button class="vbtn" id="btn-continue"><span>⟳</span> CONTINUE</button>
@@ -107,7 +109,7 @@
     <span class="k">WASD</span> Move · <span class="k">MOUSE</span> Aim · <span class="k">L-CLICK</span> Fire ·
     <span class="k">R</span> Reload · <span class="k">1-4/WHEEL</span> Weapons · <span class="k">SPACE</span> Jump<br>
     <span class="k">SHIFT</span> Sprint · <span class="k">B</span> Build · <span class="k">E</span> Interact ·
-    <span class="k">Q</span> Scan · <span class="k">TAB/J</span> Journal · <span class="k">ESC</span> Pause
+    <span class="k">Q</span> Scan · <span class="k">V</span> Camera · <span class="k">TAB/J</span> Journal · <span class="k">ESC</span> Pause
   </div>
   <div id="menu-tip"></div>
   <a id="menu-back" href="#" onclick="return false">← Back to site</a>
@@ -174,6 +176,7 @@
     <div class="set-row"><span>Music Volume</span><input type="range" id="set-music" min="0" max="100"></div>
     <div class="set-row"><span>Mouse Sensitivity</span><input type="range" id="set-sens" min="10" max="200"></div>
     <div class="set-row"><span>Invert Y</span><input type="checkbox" id="set-inverty"></div>
+    <div class="set-row"><span>First-Person by default</span><input type="checkbox" id="set-fpdefault"></div>
     <div class="set-row"><span>Graphics Quality</span>
       <div class="qbtns">
         <button class="qbtn" id="q-0">LOW</button><button class="qbtn" id="q-1">MEDIUM</button><button class="qbtn" id="q-2">HIGH</button>
