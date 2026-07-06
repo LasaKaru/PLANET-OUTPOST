@@ -197,6 +197,10 @@ const SFX = (() => {
     water()   { noise(0.9, 0.09, 950, 0.4); },
     gust()    { noise(1.6, 0.1, 420, 0.3); },
     remoteFire() { tone('square', 700, 200, 0.05, 0.05); },
+    groan()   { tone('sawtooth', 90 + srand() * 40, 55, 0.5, 0.16); noise(0.4, 0.06, 300); },
+    screech() { tone('sawtooth', 340, 900, 0.25, 0.2); tone('square', 180, 500, 0.3, 0.14);
+                setTimeout(() => tone('sawtooth', 700, 200, 0.3, 0.15), 120); },
+    splat()   { noise(0.3, 0.3, 600, 0.7); tone('sine', 160, 50, 0.25, 0.2); },
     step()    { noise(0.07, 0.09, 480 + srand() * 160); },
     land()    { noise(0.12, 0.2, 350); tone('sine', 140, 70, 0.1, 0.12); },
     chirp() {
@@ -2286,7 +2290,7 @@ const player = {
   pos: new THREE.Vector3(-8, 0, 8),
   velY: 0, grounded: true,
   yaw: 2.4, pitch: -0.12,
-  health: 130, maxHealth: 130,
+  health: 500, maxHealth: 500,
   weapons: WEAPONS.map((w, i) => ({ unlocked: i === 0, mag: w.mag, reserve: w.startReserve })),
   cur: 0,
   reloading: false, reloadT: 0,
@@ -2854,7 +2858,48 @@ const ETYPES = {
   exploder: { hp: 25,  speed: 7.4, detectR: 32, attackR: 2.4, dmg: 26, ranged: false, exploder: true, drop: [2, 2] },
   raider:   { hp: 85,  speed: 4.2, detectR: 30, attackR: 22, dmg: 11, fireA: 0.9, fireB: 1.5, ranged: true, drop: [4, 3] },
   warlord:  { hp: 450, speed: 3.0, detectR: 34, attackR: 24, dmg: 18, fireA: 1.4, fireB: 1.9, ranged: true, boss: true, drop: [20, 14] },
+  // --- infected: creative human-like "zombie" enemies (all melee) ---
+  shambler: { hp: 110, speed: 2.4, detectR: 24, attackR: 2.2, dmg: 12, ranged: false, zombie: true, drop: [3, 1] },
+  feral:    { hp: 55,  speed: 9.0, detectR: 34, attackR: 2.2, dmg: 10, ranged: false, zombie: true, feral: true, drop: [2, 2] },
+  bloater:  { hp: 150, speed: 1.9, detectR: 22, attackR: 2.4, dmg: 14, ranged: false, zombie: true, bloater: true, drop: [4, 3] },
+  brute:    { hp: 340, speed: 2.6, detectR: 24, attackR: 3.0, dmg: 26, ranged: false, zombie: true, brute: true, drop: [8, 5] },
+  screamer: { hp: 80,  speed: 3.4, detectR: 32, attackR: 2.2, dmg: 8,  ranged: false, zombie: true, screamer: true, drop: [3, 3] },
 };
+/* ---- infected humanoids: sickly reskin of the player rig, hunched and
+   reaching. Subtypes get belly bulges, mouths, spikes and scale. ---- */
+function buildZombieMesh(kind) {
+  const skin = { shambler: 0x6f8f4a, feral: 0x9aae74, bloater: 0x8a9a34,
+                 brute: 0x4d6a38, screamer: 0x7a8f52 }[kind];
+  const rot  = 0x3a4a2a;
+  const m = buildPlayerMesh(skin, rot);
+  m.gunMeshes.forEach(g => g.visible = false);   // no weapons — they claw
+  const g = m.group;
+  // sunken glowing eyes on the visor
+  const eyes = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.08, 0.06),
+    mat(0x2a1a0a, { emissive: 0xff6a2a, emissiveIntensity: 1.6 }));
+  eyes.position.set(0, 2.13, 0.44); g.add(eyes);
+  if (kind === 'bloater') {
+    g.scale.set(1.25, 1.05, 1.25);
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.55, 7, 6),
+      mat(0x9aae3a, { emissive: 0x6a8a1a, emissiveIntensity: 0.5 }));
+    belly.position.set(0, 1.1, 0.28); belly.scale.set(1.1, 0.9, 0.9); g.add(belly);
+  } else if (kind === 'brute') {
+    g.scale.setScalar(1.55);
+    for (const sd of [-1, 1]) {   // bone spurs on the shoulders
+      const spur = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.5, 4), mat(0xd8d0c0));
+      spur.position.set(sd * 0.6, 2.0, -0.1); spur.rotation.z = -sd * 0.6; g.add(spur);
+    }
+  } else if (kind === 'feral') {
+    g.scale.set(0.9, 1.0, 0.9);
+  } else if (kind === 'screamer') {
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.3, 0.12),
+      mat(0x1a0a0a, { emissive: 0x8a1a1a, emissiveIntensity: 0.8 }));
+    mouth.position.set(0, 2.0, 0.46); g.add(mouth);
+  }
+  const bodyMat = g.children[0].material;
+  return { group: g, bodyMat, legs: [m.legL, m.legR], armL: m.armL, armR: m.armR,
+           knees: [m.kneeL, m.kneeR], head: m.head, humanoid: true, zombie: true };
+}
 /* ---- human-like raiders: reuse the full player rig with hostile colors */
 function buildRaiderMesh(boss) {
   const m = buildPlayerMesh(boss ? 0x2a2530 : 0x4a4552, boss ? 0xff5f7a : 0xd94f8a);
@@ -2979,6 +3024,7 @@ function spawnEnemy(type, x, z) {
     : type === 'exploder' ? buildExploderMesh()
     : type === 'raider' ? buildRaiderMesh(false)
     : type === 'warlord' ? buildRaiderMesh(true)
+    : ETYPES[type].zombie ? buildZombieMesh(type)
     : buildStalkerMesh(type === 'heavy' ? 1.45 : 1, type === 'heavy');
   const e = {
     type, T, alive: true, mesh: built.group, parts: built,
@@ -3014,6 +3060,23 @@ function onAlert(e) {
     e.calledBackup = true;
     callBackup(e, '⚠ A scout drone is calling for backup!');
   }
+  if (e.type === 'screamer' && !e.calledBackup) {
+    e.calledBackup = true;
+    SFX.screech();
+    showToast('🧟 A screamer wails — the infected are coming!');
+    const sp = e.mesh.position.clone();
+    setTimeout(() => {
+      if (game.state !== 'playing' || !e.alive) return;
+      if (enemies.filter(x => x.alive).length >= 18) return;
+      for (let i = 0; i < 3; i++) {
+        const a = rand(0, Math.PI * 2);
+        const ne = spawnEnemy(pick(['shambler', 'feral', 'shambler']),
+          clamp(sp.x + Math.cos(a) * 16, -130, 130),
+          clamp(sp.z + Math.sin(a) * 16, -130, 130));
+        ne.state = 'chase'; ne.alerted = true;
+      }
+    }, 1400);
+  } else if (e.T && e.T.zombie && !e.groaned) { e.groaned = true; SFX.groan(); }
 }
 // radio in two reinforcements near the caller after a short delay
 function callBackup(e, label) {
@@ -3078,6 +3141,14 @@ function killEnemy(e) {
   scene.remove(e.mesh);
   SFX.explode();
   if (e.type === 'exploder') explodeAt(e.mesh.position.clone(), 3.5, 14);   // dies loudly
+  if (e.T && e.T.bloater) {   // toxic gas burst
+    const p = e.mesh.position.clone().add(new THREE.Vector3(0, 1, 0));
+    SFX.splat();
+    emit(p, 0x8aae2a, 20, 6, 1.1, 1.8, 0.2);
+    emit(p, 0x5a7a1a, 12, 4, 1.4, 1.4, 0.15);
+    if (p.distanceTo(player.pos.clone().add(new THREE.Vector3(0, 1, 0))) < 4.5) damagePlayer(16);
+  }
+  if (e.T && e.T.zombie) SFX.groan();
   if (e.type === 'warlord') {
     emit(e.mesh.position.clone().add(new THREE.Vector3(0, 1.5, 0)), 0xff5f7a, 22, 9, 1.1, 1.8);
     slowmoT = 1.6;
@@ -3204,13 +3275,16 @@ function updateEnemies(dt) {
           }
         }
       } else {
-        // scout: rush in, slash, dart away
+        // melee rush (scouts & the infected): close in and strike
         moveEnemyToward(e, pPos, e.speed, dt);
         e.meleeCd -= dt;
-        if (distToPlayer < 1.9 && e.meleeCd <= 0) {
-          e.meleeCd = 1.1;
+        const reach = e.T.attackR + 0.4;
+        if (distToPlayer < reach && e.meleeCd <= 0) {
+          e.meleeCd = e.T.brute ? 1.6 : e.T.zombie ? 1.3 : 1.1;
           damagePlayer(e.T.dmg);
-          emit(pPos.clone().add(new THREE.Vector3(0, 1, 0)), 0xff4a5c, 5, 4, 0.3);
+          const col = e.T.zombie ? 0x8aae2a : 0xff4a5c;
+          emit(pPos.clone().add(new THREE.Vector3(0, 1, 0)), col, 6, 4, 0.3);
+          if (e.T.brute) SFX.hurt();   // heavy thud
         }
       }
     }
@@ -3224,13 +3298,26 @@ function updateEnemies(dt) {
       m.position.y = terrainHeight(m.position.x, m.position.z);
       const walk = Math.sin(e.t * 8) * 0.3;
       if (e.parts.legs) { e.parts.legs[0].rotation.x = walk; e.parts.legs[1].rotation.x = -walk; }
-      if (e.parts.humanoid) {
+      if (e.parts.zombie) {
+        // hunched shamble: arms reaching forward, head lolling, lurch
+        const sh = Math.sin(e.t * (e.T.feral ? 12 : 4));
+        e.parts.legs[0].rotation.x = sh * 0.35;
+        e.parts.legs[1].rotation.x = -sh * 0.35;
+        e.parts.knees[0].rotation.x = Math.max(0, -sh) * 0.9;
+        e.parts.knees[1].rotation.x = Math.max(0, sh) * 0.9;
+        e.parts.armL.rotation.x = -1.9 + Math.sin(e.t * 3) * 0.18;
+        e.parts.armR.rotation.x = -2.0 + Math.cos(e.t * 3.3) * 0.18;
+        if (e.parts.head) e.parts.head.rotation.z = Math.sin(e.t * 1.7) * 0.2;
+        m.rotation.z = Math.sin(e.t * (e.T.feral ? 9 : 2.5)) * 0.06;   // side lurch
+      } else if (e.parts.humanoid) {
         e.parts.knees[0].rotation.x = Math.max(0, -walk) * 1.1;
         e.parts.knees[1].rotation.x = Math.max(0, walk) * 1.1;
         e.parts.armL.rotation.x = -walk * 0.9;
         e.parts.armR.rotation.x = (e.state === 'attack' || e.state === 'chase')
           ? -Math.PI / 2 + 0.1 : walk * 0.9;
       }
+      // ambient groans from nearby infected
+      if (e.T.zombie && srand() < dt * 0.25 && distToPlayer < 30) SFX.groan();
       m.position.y += Math.abs(Math.sin(e.t * 8)) * 0.05;
       // exploders pulse red, faster as they close in
       if (e.T.exploder && e.flash <= 0) {
@@ -3280,7 +3367,8 @@ function spawnAmbientEnemy() {
   const hubDist = Math.hypot(x - CAMPER_POS.x, z - CAMPER_POS.z);
   const type = hubDist < 65
     ? pick(['stalker', 'stalker', 'wasp'])
-    : pick(['stalker', 'scout', 'scout', 'wasp', 'heavy', 'sniper', 'exploder', 'raider']);
+    : pick(['stalker', 'scout', 'wasp', 'heavy', 'sniper', 'exploder', 'raider',
+            'shambler', 'shambler', 'feral', 'bloater', 'brute']);
   spawnEnemy(type, x, z);
 }
 
@@ -4138,7 +4226,7 @@ function loadGame() {
   Object.assign(player.res, d.res);
   player.kills = d.kills || 0;
   player.upgrades = Object.assign({ vit: 0, dmg: 0, spd: 0, mag: 0, bld: 0 }, d.upgrades);
-  player.maxHealth = 130 + (player.upgrades.vit ? 25 : 0);
+  player.maxHealth = 500 + (player.upgrades.vit ? 25 : 0);
   player.health = clamp(d.health, 1, player.maxHealth);
   d.weapons.forEach((w, i) => Object.assign(player.weapons[i], w));
   player.cur = 0; switchWeapon(d.cur || 0);
@@ -4325,6 +4413,9 @@ function seedEnemies() {
   // wilder spawns farther out
   [[90, -40, 'scout'], [-100, -60, 'exploder'], [100, 90, 'heavy'],
    [-90, 90, 'sniper'], [60, -110, 'wasp'], [0, 120, 'scout']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
+  // an infected pack haunting the old ruins in the north-east
+  [[64, 118, 'shambler'], [72, 122, 'shambler'], [68, 126, 'bloater'],
+   [76, 114, 'feral'], [70, 130, 'screamer']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
   // raider camp garrison — the Warlord holds court until his mission is done
   const rc = RAIDER_CAMP;
   if (!missionState.warlord.done) {
@@ -4910,7 +5001,8 @@ function updateMinimap() {
   dot(VILLAGE_POS.x, VILLAGE_POS.z, '#b8e08a', 3.5, true);
   dot(RAIDER_CAMP.x, RAIDER_CAMP.z, '#ff8a5c', 3.5, true);
   for (const p of pylons) dot(p.x, p.z, p.active ? '#5ff2d0' : '#68737f', 2.5);
-  for (const e of enemies) if (e.alive) dot(e.mesh.position.x, e.mesh.position.z, '#ff4a5c', 2.5);
+  for (const e of enemies) if (e.alive)
+    dot(e.mesh.position.x, e.mesh.position.z, (e.T && e.T.zombie) ? '#9ad83a' : '#ff4a5c', 2.5);
   for (const w of wildlife) if (!w.fly) dot(w.mesh.position.x, w.mesh.position.z, '#7be08a', 1.5);
   for (const p of pickups) if (p.kind === 'medkit') dot(p.x, p.z, '#ff6a7a', 2);   // medipacks
   for (const v of vehicles) dot(v.mesh.position.x, v.mesh.position.z,
@@ -5173,6 +5265,22 @@ const pods = [];
 function updateEvents(dt) {
   if (stormT > 0) stormT -= dt;
   eventT -= dt;
+  // the infected rise at night — a creeping horde closes in from the dark
+  if (eventT <= 0 && lastDayAmt < 0.4 && srand() < 0.6) {
+    eventT = rand(75, 120);
+    showMessage('🧟 THE INFECTED RISE — a horde stirs in the dark…');
+    SFX.groan();
+    const n = 5 + Math.round((1 - lastDayAmt) * 4);
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2), r = rand(30, 48);
+      const type = pick(['shambler', 'shambler', 'feral', 'bloater', 'screamer', 'brute']);
+      const e = spawnEnemy(type,
+        clamp(player.pos.x + Math.cos(a) * r, -130, 130),
+        clamp(player.pos.z + Math.sin(a) * r, -130, 130));
+      e.state = 'chase'; e.alerted = true;
+    }
+    return;
+  }
   if (eventT <= 0) {
     eventT = rand(110, 170);
     const roll = srand();
@@ -5430,7 +5538,16 @@ const CODES = {
                    flash(godMode ? '🛡 GOD MODE ON' : 'GOD MODE OFF'); },
   boom:    () => { let n = 0; for (const e of enemies) if (e.alive &&
                      e.mesh.position.distanceTo(player.pos) < 60) { killEnemy(e); n++; }
-                   flash('💥 ' + n + ' DRONES VAPORIZED'); },
+                   flash('💥 ' + n + ' ENEMIES VAPORIZED'); },
+  horde:   () => { const f = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+                   for (let i = 0; i < 6; i++) {
+                     const a = player.yaw + rand(-0.7, 0.7), r = rand(10, 20);
+                     const e = spawnEnemy(pick(['shambler', 'feral', 'bloater', 'brute', 'screamer', 'shambler']),
+                       clamp(player.pos.x + Math.sin(a) * r, -130, 130),
+                       clamp(player.pos.z + Math.cos(a) * r, -130, 130));
+                     e.state = 'chase'; e.alerted = true;
+                   }
+                   flash('🧟 INFECTED HORDE SUMMONED'); SFX.groan(); },
   sunny:   () => { dayClock = 55; flash('☀ DAYLIGHT'); },
   spooky:  () => { dayClock = DAY_LENGTH * 0.5; flash('☾ NIGHTFALL'); },
   heal:    () => { player.health = player.maxHealth; updateHealthUI(); flash('✚ HULL RESTORED'); },

@@ -66,7 +66,7 @@ Enemies, missions, and loot are simulated per player.
 drive/fly (Space/C raise & lower the ship), **E** to exit.
 
 **Cheat codes** (open the console with **Enter** or **/**): `rover`, `flyme`,
-`loaded`, `arsenal`, `boom`, `tank`, `heal`, `sunny`, `spooky`.
+`loaded`, `arsenal`, `boom`, `tank`, `heal`, `sunny`, `spooky`, `horde` (summon an infected horde).
 
 ## Project layout
 
