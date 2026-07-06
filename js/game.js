@@ -2375,6 +2375,7 @@ let dragLook = false, lastMX = 0, lastMY = 0;
 let expectUnlock = false;   // set when we exit lock intentionally (journal etc.)
 
 document.addEventListener('keydown', e => {
+  if (consoleOpen) return;   // cheat console captures typing
   keys[e.code] = true;
   if (e.code === 'Tab') e.preventDefault();
   // explicit pause; the pointer-lock-exit path also pauses as a fallback
@@ -2430,6 +2431,12 @@ document.addEventListener('mousemove', e => {
   if (game.state === 'photo') {   // free camera look
     photoYaw -= dx * s;
     photoPitch = clamp(photoPitch - (settings.invertY ? -dy : dy) * s * 0.92, -1.35, 1.35);
+    return;
+  }
+  if (activeVehicle) {   // steer the vehicle with the mouse
+    activeVehicle.yaw -= dx * s;
+    if (activeVehicle.kind === 'ship')
+      activeVehicle.pitch = clamp(activeVehicle.pitch - (settings.invertY ? -dy : dy) * s * 0.8, -0.9, 0.9);
     return;
   }
   player.yaw -= dx * s;
@@ -3994,6 +4001,13 @@ function updatePickups(dt) {
 /* ==================== INTERACTION (E) ============================== */
 let cacheFound = false, bridgeBuilt = false, raiderLootFound = false;
 function interactTarget() {
+  if (activeVehicle)
+    return { kind: 'exitvehicle', label: 'Press <b>E</b> to exit the ' +
+      (activeVehicle.kind === 'ship' ? 'spaceship' : 'rover') };
+  const veh = nearestVehicle();
+  if (veh)
+    return { kind: 'vehicle', veh, label: 'Press <b>E</b> to ' +
+      (veh.kind === 'ship' ? 'board the spaceship' : 'drive the rover') };
   if (player.pos.distanceTo(new THREE.Vector3(CAMPER_POS.x, player.pos.y, CAMPER_POS.z)) < 9)
     return { kind: 'camper', label: 'Press <b>E</b> to resupply at the outpost camper' };
   for (const p of pylons)
@@ -4022,6 +4036,8 @@ function updateInteract() {
 function tryInteract() {
   const t = interactTarget();
   if (!t) return;
+  if (t.kind === 'exitvehicle') { exitVehicle(); return; }
+  if (t.kind === 'vehicle') { enterVehicle(t.veh); return; }
   if (t.kind === 'camper') {
     player.health = player.maxHealth;
     for (let k = 0; k < 4; k++)
@@ -4461,7 +4477,8 @@ function animate() {
     flashT -= dt;
     if (flashT <= 0) hideMuzzleFlashes();
 
-    updatePlayer(dt);
+    if (activeVehicle) { updateVehicle(dt); }
+    else updatePlayer(dt);
     updateEnemies(dt);
     updateEnemyProjectiles(dt);
     updateBuildings(dt);
@@ -4473,7 +4490,8 @@ function animate() {
     updateWildlife(dt);
     updateBuildGhost();
     updateInteract();
-    updateCamera(dt);
+    if (activeVehicle) updateVehicleCamera(dt);
+    else updateCamera(dt);
     updateRemotePlayers(dt);
     netTick(dt);
     updateEvents(dt);
@@ -4895,6 +4913,8 @@ function updateMinimap() {
   for (const e of enemies) if (e.alive) dot(e.mesh.position.x, e.mesh.position.z, '#ff4a5c', 2.5);
   for (const w of wildlife) if (!w.fly) dot(w.mesh.position.x, w.mesh.position.z, '#7be08a', 1.5);
   for (const p of pickups) if (p.kind === 'medkit') dot(p.x, p.z, '#ff6a7a', 2);   // medipacks
+  for (const v of vehicles) dot(v.mesh.position.x, v.mesh.position.z,
+    v.kind === 'ship' ? '#8ab8ff' : '#e07b39', 3, true);   // vehicles
   for (let i = 0; i < SECRETS.length; i++)   // shard detector: close range only
     if (secretMeshes[i] && Math.hypot(SECRETS[i].x - px, SECRETS[i].z - pz) < 40)
       dot(SECRETS[i].x, SECRETS[i].z, '#ffd166', 2.5);
@@ -5208,6 +5228,267 @@ function updateEvents(dt) {
     }
   }
 }
+
+/* =====================================================================
+   VEHICLES — a drivable ground ROVER and a flyable SPACESHIP, plus a
+   secret-code system to summon them and trigger other cheats.
+   Enter/exit with E. While mounted, WASD drives/flies the vehicle and
+   a chase camera follows it; the player rides along, mesh hidden.
+   ===================================================================== */
+const vehicles = [];
+let activeVehicle = null;
+
+/* ---- ROVER: six-wheeled buggy in the reference orange/teal palette ---- */
+function makeRover(x, z) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.8, 4.0), mat(PAL.orange));
+  body.position.y = 1.1; body.castShadow = true; g.add(body);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 1.8), mat(PAL.teal));
+  cab.position.set(0, 1.75, -0.3); cab.castShadow = true; g.add(cab);
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.7, 0.15), MAT.darkGlass);
+  glass.position.set(0, 1.8, 0.62); glass.rotation.x = -0.2; g.add(glass);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.14, 0.14), MAT.cyanGlow);
+  bar.position.set(0, 1.45, 2.0); g.add(bar);
+  for (const sx of [-1, 1]) {   // headlights
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.24, 0.12), MAT.windowGlow);
+    hl.position.set(sx * 0.8, 1.05, 2.02); g.add(hl);
+  }
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.3, 4.02), MAT.grayDark);
+  stripe.position.y = 0.8; g.add(stripe);
+  const wheels = [];
+  const wheelGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.4, 8);
+  for (const wz of [-1.3, 0, 1.3]) for (const wx of [-1.3, 1.3]) {
+    const w = new THREE.Mesh(wheelGeo, mat(0x26222c));
+    w.rotation.z = Math.PI / 2;
+    w.position.set(wx, 0.55, wz); w.castShadow = true; g.add(w);
+    wheels.push(w);
+  }
+  // roof antenna with beacon
+  const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.9, 4), MAT.grayDark);
+  ant.position.set(-0.8, 2.6, -0.6); g.add(ant);
+  const beacon = new THREE.Mesh(new THREE.OctahedronGeometry(0.1, 0), MAT.redGlow);
+  beacon.position.set(-0.8, 3.1, -0.6); g.add(beacon);
+  g.position.set(x, terrainHeight(x, z), z);
+  scene.add(g);
+  const v = { kind: 'rover', mesh: g, wheels, beacon, yaw: 0, speed: 0, vy: 0,
+    seatY: 1.5, x, z };
+  vehicles.push(v);
+  return v;
+}
+
+/* ---- SPACESHIP: sleek shuttle with glowing thrusters & wings ---- */
+function makeShip(x, z) {
+  const g = new THREE.Group();
+  const hull = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, 4.6, 6), mat(PAL.grayLight));
+  hull.rotation.x = Math.PI / 2; hull.castShadow = true; g.add(hull);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.6, 6), mat(PAL.teal));
+  nose.rotation.x = Math.PI / 2; nose.position.z = 3.0; g.add(nose);
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 6), MAT.darkGlass);
+  canopy.scale.set(1, 0.7, 1.4); canopy.position.set(0, 0.5, 1.1); g.add(canopy);
+  for (const sx of [-1, 1]) {   // swept wings with orange tips
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.16, 1.4), mat(PAL.techBlue));
+    wing.position.set(sx * 1.7, -0.1, -0.6); wing.rotation.y = sx * 0.4; wing.castShadow = true; g.add(wing);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.7), mat(PAL.orange));
+    tip.position.set(sx * 2.8, -0.1, -0.2); g.add(tip);
+  }
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.1, 1.3), mat(PAL.techBlue));
+  fin.position.set(0, 0.6, -1.8); g.add(fin);
+  const thrusters = [];
+  for (const sx of [-0.5, 0.5]) {
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.24, 0.5, 6), MAT.cyanGlow.clone());
+    t.rotation.x = Math.PI / 2; t.position.set(sx, -0.05, -2.5); g.add(t);
+    thrusters.push(t);
+  }
+  g.position.set(x, terrainHeight(x, z) + 6, z);
+  scene.add(g);
+  const v = { kind: 'ship', mesh: g, thrusters, yaw: 0, pitch: 0, vel: new THREE.Vector3(),
+    bank: 0, seatY: 0.4, x, z, hoverY: terrainHeight(x, z) + 6 };
+  vehicles.push(v);
+  return v;
+}
+
+function nearestVehicle() {
+  let best = null, bd = 6;
+  for (const v of vehicles) {
+    const d = Math.hypot(v.mesh.position.x - player.pos.x, v.mesh.position.z - player.pos.z);
+    const dy = Math.abs(v.mesh.position.y - player.pos.y);
+    if (d < bd && dy < 8) { bd = d; best = v; }
+  }
+  return best;
+}
+function enterVehicle(v) {
+  activeVehicle = v;
+  player.mesh.group.visible = false;
+  fpRig.visible = false;
+  buildMode && toggleBuildMode();
+  if (v.kind === 'rover') { v.yaw = player.yaw; v.speed = 0; }
+  else { v.yaw = player.yaw; v.pitch = 0; v.vel.set(0, 0, 0); v.hoverY = v.mesh.position.y; }
+  $('cam-ind').textContent = v.kind === 'ship' ? '🚀 FLYING' : '🛞 DRIVING';
+  SFX.powerup();
+  showToast(v.kind === 'ship' ? 'Spaceship online — SPACE up · C down · E to exit'
+                              : 'Rover engaged — WASD to drive · E to exit');
+}
+function exitVehicle() {
+  const v = activeVehicle;
+  activeVehicle = null;
+  // drop the player just beside the vehicle
+  const off = new THREE.Vector3(Math.cos(v.yaw), 0, -Math.sin(v.yaw)).multiplyScalar(3);
+  player.pos.set(v.mesh.position.x + off.x, 0, v.mesh.position.z + off.z);
+  player.pos.y = terrainHeight(player.pos.x, player.pos.z);
+  player.yaw = v.yaw; player.velY = 0;
+  setCamMode(camMode);   // restores mesh / fp rig visibility
+  SFX.click();
+  showToast('Dismounted');
+}
+function updateVehicle(dt) {
+  const v = activeVehicle;
+  if (v.kind === 'rover') {
+    const accel = keys['KeyW'] ? 1 : keys['KeyS'] ? -0.6 : 0;
+    const boost = (keys['ShiftLeft'] || keys['ShiftRight']) ? 1.7 : 1;
+    v.speed += (accel * 26 * boost - v.speed) * Math.min(dt * 2.2, 1);
+    if (!accel) v.speed *= (1 - Math.min(dt * 1.4, 1));   // rolling friction
+    // steering scales with speed
+    const steer = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
+    v.yaw += steer * dt * 1.5 * clamp(Math.abs(v.speed) / 10, 0, 1) * Math.sign(v.speed || 1);
+    const fwd = new THREE.Vector3(Math.sin(v.yaw), 0, Math.cos(v.yaw));
+    let nx = v.mesh.position.x + fwd.x * v.speed * dt;
+    let nz = v.mesh.position.z + fwd.z * v.speed * dt;
+    const push = circleVsColliders(nx, nz, 1.6, 0);   // bounce off big obstacles
+    if (Math.abs(push.x) > 0.01 || Math.abs(push.z) > 0.01) { v.speed *= 0.3; nx += push.x; nz += push.z; }
+    const B = WORLD_SIZE / 2 - 3;
+    nx = clamp(nx, -B, B); nz = clamp(nz, -B, B);
+    const gy = groundYAt(nx, nz, 99);
+    v.mesh.position.set(nx, gy, nz);
+    // orient to heading + tilt to slope
+    const ahead = groundYAt(nx + fwd.x, nz + fwd.z, 99);
+    const pitch = Math.atan2(gy - ahead, 1) * 0.6;
+    v.mesh.rotation.set(pitch, v.yaw, Math.sin(v.yaw) * 0);
+    for (const w of v.wheels) w.rotation.x += v.speed * dt * 1.6;
+    v.beacon.rotation.y += dt * 3;
+    // dust when moving
+    if (Math.abs(v.speed) > 6 && srand() < dt * 12)
+      emit(v.mesh.position.clone().add(new THREE.Vector3(rand(-1, 1), 0.2, rand(-1.5, 1.5))),
+        0xcaa085, 2, 2, 0.5, 0.9, 0.3);
+  } else {   // ship
+    const boost = (keys['ShiftLeft'] || keys['ShiftRight']) ? 2.0 : 1;
+    const thrust = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+    const strafe = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+    const lift = (keys['Space'] ? 1 : 0) - ((keys['KeyC'] || keys['ControlLeft']) ? 1 : 0);
+    const fwd = new THREE.Vector3(
+      Math.sin(v.yaw) * Math.cos(v.pitch), Math.sin(v.pitch), Math.cos(v.yaw) * Math.cos(v.pitch));
+    const right = new THREE.Vector3(Math.cos(v.yaw), 0, -Math.sin(v.yaw));
+    const acc = new THREE.Vector3();
+    acc.addScaledVector(fwd, thrust * 34 * boost);
+    acc.addScaledVector(right, strafe * 20);
+    acc.y += lift * 24;
+    v.vel.addScaledVector(acc, dt);
+    v.vel.multiplyScalar(1 - Math.min(dt * 1.1, 0.6));   // air drag
+    v.mesh.position.addScaledVector(v.vel, dt);
+    // keep it above the ground and under the ceiling
+    const floor = terrainHeight(v.mesh.position.x, v.mesh.position.z) + 2.2;
+    if (v.mesh.position.y < floor) { v.mesh.position.y = floor; v.vel.y = Math.max(v.vel.y, 0); }
+    v.mesh.position.y = Math.min(v.mesh.position.y, 90);
+    const B = WORLD_SIZE / 2 - 3;
+    v.mesh.position.x = clamp(v.mesh.position.x, -B, B);
+    v.mesh.position.z = clamp(v.mesh.position.z, -B, B);
+    v.bank += (-strafe * 0.5 - v.bank) * Math.min(dt * 4, 1);
+    v.mesh.rotation.set(-v.pitch, v.yaw, v.bank);
+    const glow = 1.2 + (thrust > 0 ? 1.2 : 0) + Math.sin(wallT * 30) * 0.3;
+    for (const t of v.thrusters) t.material.emissiveIntensity = glow;
+    if (thrust > 0 && srand() < dt * 16)
+      emit(v.mesh.position.clone().addScaledVector(fwd, -2.6), 0x54e0e8, 2, 3, 0.4, 0.8, 0.05);
+  }
+  // the player rides in the seat
+  player.pos.copy(v.mesh.position);
+}
+function updateVehicleCamera(dt) {
+  const v = activeVehicle;
+  const yaw = v.yaw;
+  const back = v.kind === 'ship' ? 11 : 8.5;
+  const up = v.kind === 'ship' ? 4.2 : 3.6;
+  const tp = v.mesh.position.clone().add(new THREE.Vector3(0, v.seatY + 0.6, 0));
+  const desired = tp.clone().add(new THREE.Vector3(
+    -Math.sin(yaw) * back, up, -Math.cos(yaw) * back));
+  if (v.kind === 'rover') desired.y = Math.max(desired.y, groundYAt(desired.x, desired.z, 99) + 1.2);
+  camera.position.lerp(desired, 1 - Math.pow(0.0001, dt));
+  const look = v.mesh.position.clone().add(new THREE.Vector3(
+    Math.sin(yaw) * 6, v.kind === 'ship' ? Math.sin(v.pitch) * 6 : 1, Math.cos(yaw) * 6));
+  camera.lookAt(look);
+}
+
+/* ==================== SECRET CODES ================================= */
+// Type a code (letters, no prompt) during play to trigger it.
+const CODES = {
+  rover:   () => { summonVehicle('rover'); },
+  flyme:   () => { summonVehicle('ship'); },
+  loaded:  () => { player.res.m += 50; player.res.e += 50; player.res.b += 50; player.res.cores += 5;
+                   updateCountersUI(); flash('💰 RESOURCES GRANTED'); },
+  arsenal: () => { for (let i = 0; i < 4; i++) if (!player.weapons[i].unlocked) unlockWeapon(i);
+                   for (let i = 0; i < 4; i++) player.weapons[i].reserve += 200;
+                   updateAmmoUI(); flash('🔫 FULL ARSENAL UNLOCKED'); },
+  tank:    () => { godMode = !godMode; player.invuln = godMode ? 1e9 : 0;
+                   flash(godMode ? '🛡 GOD MODE ON' : 'GOD MODE OFF'); },
+  boom:    () => { let n = 0; for (const e of enemies) if (e.alive &&
+                     e.mesh.position.distanceTo(player.pos) < 60) { killEnemy(e); n++; }
+                   flash('💥 ' + n + ' DRONES VAPORIZED'); },
+  sunny:   () => { dayClock = 55; flash('☀ DAYLIGHT'); },
+  spooky:  () => { dayClock = DAY_LENGTH * 0.5; flash('☾ NIGHTFALL'); },
+  heal:    () => { player.health = player.maxHealth; updateHealthUI(); flash('✚ HULL RESTORED'); },
+};
+let godMode = false;
+let consoleOpen = false;
+function flash(txt) { showMessage(txt); SFX.unlock(); }
+function summonVehicle(kind) {
+  // move an existing vehicle of this kind next to the player (or note it)
+  let v = vehicles.find(vv => vv.kind === kind);
+  const off = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw)).multiplyScalar(4.2);
+  const sx = player.pos.x + off.x, sz = player.pos.z + off.z;
+  if (!v) v = kind === 'ship' ? makeShip(sx, sz) : makeRover(sx, sz);
+  const gy = terrainHeight(sx, sz);
+  v.mesh.position.set(sx, kind === 'ship' ? gy + 6 : gy, sz);
+  if (kind === 'ship') v.hoverY = gy + 6;
+  flash(kind === 'ship' ? '🚀 SPACESHIP SUMMONED' : '🛞 ROVER SUMMONED');
+}
+// Cheat command console — open with Enter (or /), type a code, Enter to run.
+// While open, game keybinds are suppressed (guarded in the main handler).
+const cmdInput = $('cmd-console');
+function openConsole() {
+  if (consoleOpen || game.state !== 'playing') return;
+  consoleOpen = true;
+  cmdInput.value = '';
+  cmdInput.style.display = 'block';
+  expectUnlock = true;
+  if (document.exitPointerLock) document.exitPointerLock();
+  cmdInput.focus();
+}
+function closeConsole() {
+  consoleOpen = false;
+  cmdInput.style.display = 'none';
+  cmdInput.blur();
+  requestLock();
+}
+function runConsole() {
+  const code = cmdInput.value.trim().toLowerCase();
+  closeConsole();
+  if (CODES[code]) CODES[code]();
+  else if (code) showToast('Unknown code: ' + code);
+}
+if (cmdInput) {
+  cmdInput.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.code === 'Enter') runConsole();
+    else if (e.code === 'Escape') closeConsole();
+  });
+}
+document.addEventListener('keydown', e => {
+  if (game.state !== 'playing') return;
+  if (consoleOpen) return;
+  if (e.code === 'Enter' || (e.code === 'Slash' && !e.shiftKey)) { e.preventDefault(); openConsole(); }
+});
+
+// spawn the two parked vehicles at the hub & landing pad
+makeRover(CAMPER_POS.x - 10, CAMPER_POS.z + 6);
+makeShip(-40, 74);   // on the landing pad
 
 animate();
 

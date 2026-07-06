@@ -232,3 +232,11 @@ html,body { width:100%; height:100%; overflow:hidden; background:#151019;
 #pause-title { color:#7be0e0; } #death-title { color:var(--red); }
 .death-stats { font-size:14px; color:#cfd8e3; margin-bottom:24px; line-height:1.9; }
 .death-stats b { color:var(--amber); }
+
+/* ============ cheat command console ============ */
+#cmd-console { position:fixed; left:50%; bottom:120px; transform:translateX(-50%);
+  width:min(460px,80vw); display:none; padding:11px 16px; z-index:30; pointer-events:auto;
+  background:rgba(10,14,10,0.9); border:1px solid var(--lime); border-radius:8px;
+  color:var(--lime); font-family:'Consolas',monospace; font-size:15px; letter-spacing:2px;
+  box-shadow:0 0 20px var(--lime-glow); outline:none; }
+#cmd-console::placeholder { color:#6a7a52; letter-spacing:1px; font-size:12px; }

@@ -40,7 +40,16 @@ Enemies, missions, and loot are simulated per player.
 | E | Interact (camper, pylons, bridge, cache) |
 | Q | Scan wildlife |
 | Tab / J | Field journal (missions, upgrades, lore) |
+| Enter or / | Cheat console (type a code) |
+| E | Also boards/exits a nearby rover or spaceship |
 | Esc | Pause |
+
+**Vehicles:** a drivable **rover** is parked by the outpost camper and a
+**spaceship** sits on the landing pad — press **E** to board, **WASD** to
+drive/fly (Space/C raise & lower the ship), **E** to exit.
+
+**Cheat codes** (open the console with **Enter** or **/**): `rover`, `flyme`,
+`loaded`, `arsenal`, `boom`, `tank`, `heal`, `sunny`, `spooky`.
 
 ## Project layout
 
