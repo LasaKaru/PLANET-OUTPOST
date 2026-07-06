@@ -65,6 +65,7 @@ const QUALITY = [
 const SFX = (() => {
   let ctx = null, master = null, sfxBus = null, musicBus = null, noiseBuf = null;
   let musicTimer = null, windSrc = null;
+  let combatGain = null, combatTimer = null, combatLevel = 0;
   function init() {
     if (ctx) return;
     ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -135,6 +136,24 @@ const SFX = (() => {
       o.connect(g); g.connect(musicBus); o.start(tt); o.stop(tt + 2.6);
     }
   }
+  // ---- dynamic combat layer: a driving bass pulse that fades in when
+  //      enemies are engaged and fades back out when the fight ends ----
+  function combatPulse() {
+    if (!ctx || combatLevel < 0.02) return;
+    const t = ctx.currentTime;
+    const roots = [55, 55, 73.4, 49];   // low A / D / G drone roots
+    const f = roots[Math.floor(srand() * roots.length)];
+    for (let i = 0; i < 2; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = i ? 'sawtooth' : 'square';
+      o.frequency.value = f * (i ? 2 : 1);
+      const tt = t + i * 0.16;
+      g.gain.setValueAtTime(0, tt);
+      g.gain.linearRampToValueAtTime(0.05 * combatLevel, tt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, tt + 0.34);
+      o.connect(g); g.connect(combatGain); o.start(tt); o.stop(tt + 0.4);
+    }
+  }
   function startMusic() {
     if (musicTimer) return;
     pad();
@@ -144,10 +163,15 @@ const SFX = (() => {
     const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 320; f.Q.value = 0.6;
     const g = ctx.createGain(); g.gain.value = 0.035;
     windSrc.connect(f); f.connect(g); g.connect(musicBus); windSrc.start();
+    // combat layer bus + its steady 8th-note pulse
+    combatGain = ctx.createGain(); combatGain.gain.value = 1; combatGain.connect(musicBus);
+    combatTimer = setInterval(combatPulse, 360);
   }
   return {
     init, applyVolumes,
     resume() { if (ctx && ctx.state === 'suspended') ctx.resume(); },
+    // combat intensity 0..1 drives the tension layer volume
+    setCombat(v) { combatLevel += (v - combatLevel) * 0.08; },
     // ---- weapon fire sounds, distinct per weapon ----
     firePistol()  { tone('square', 950, 160, 0.08, 0.2); noise(0.06, 0.2, 3400); },
     fireRifle()   { tone('sawtooth', 700, 130, 0.07, 0.16); noise(0.05, 0.22, 2600); },
@@ -1870,6 +1894,60 @@ makeRuin(-40, -110);
 makeRuin(70, 120);
 makeRuin(-130, 60);
 
+/* =====================================================================
+   DESTRUCTIBLES — supply crates you can shoot open for loot.
+   Registered in losBlockers so bullets hit them; userData.dest links
+   the mesh back to its entry for damage handling in tryShoot.
+   ===================================================================== */
+const breakables = [];
+function makeBreakableCrate(x, z) {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.9, 1.0), MAT.mustard);
+  box.position.y = 0.45; box.castShadow = true; g.add(box);
+  const strap = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.16, 1.05), MAT.grayDark);
+  strap.position.y = 0.5; g.add(strap);
+  const mark = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.32, 0.06), MAT.cyanGlow);
+  mark.position.set(0, 0.5, 0.51); g.add(mark);
+  g.position.set(x, terrainHeight(x, z), z);
+  g.rotation.y = rand(0, Math.PI);
+  scene.add(g);
+  const entry = {
+    mesh: g, hp: 30, alive: true,
+    collider: addBoxCollider(x, z, 1.2, 1.2, terrainHeight(x, z) + 1),
+    blockers: [],
+  };
+  g.traverse(o => {
+    if (o.isMesh) {
+      o.userData.dest = entry;
+      losBlockers.push(o); cameraBlockers.push(o);
+      entry.blockers.push(o);
+    }
+  });
+  breakables.push(entry);
+}
+function damageBreakable(entry, dmg) {
+  if (!entry.alive) return;
+  entry.hp -= dmg;
+  emit(entry.mesh.position.clone().add(new THREE.Vector3(0, 0.6, 0)), 0xd9a53a, 3, 3, 0.3, 0.6);
+  if (entry.hp <= 0) {
+    entry.alive = false;
+    SFX.crumble();
+    emit(entry.mesh.position.clone().add(new THREE.Vector3(0, 0.5, 0)), 0xd9a53a, 12, 5, 0.8, 1.1);
+    scene.remove(entry.mesh);
+    removeCollider(entry.collider);
+    removeFromArr(losBlockers, entry.blockers);
+    removeFromArr(cameraBlockers, entry.blockers);
+    const p = entry.mesh.position;
+    for (let k = 0; k < 2; k++)
+      spawnPickup(pick(['metal', 'energy', 'bio', 'ammo']), p.x + rand(-1.5, 1.5), p.z + rand(-1.5, 1.5));
+    showToast('📦 Crate smashed — supplies scattered!');
+  }
+}
+// crates near the base, along roads, and scattered in the wilds
+[[-42, -24], [-18, -46], [24, 12], [46, 40], [8, 70], [-70, 30],
+ [80, -20], [-30, 90], [60, -80], [110, 60], [-100, 10], [20, -60]]
+  .forEach(([x, z]) => makeBreakableCrate(x, z));
+
 /* ==================== WEAPON MODELS ================================ */
 // Shared by the third-person rig, the first-person viewmodel, and
 // remote co-op players.
@@ -2092,6 +2170,11 @@ const player = {
   kills: 0, walkPhase: 0, moveAmount: 0, recoil: 0, hurtCd: 0, invuln: 0,
   upgrades: { vit: 0, dmg: 0, spd: 0, mag: 0, bld: 0 },
 };
+// per-weapon attachments: { dmg, mag, scope } booleans, index-aligned to WEAPONS
+const weaponMods = [{}, {}, {}, {}];
+let ngPlus = 0;   // New Game+ tier — scales enemy hp & damage
+function ngHpMult()  { return 1 + ngPlus * 0.6; }
+function ngDmgMult() { return 1 + ngPlus * 0.35; }
 scene.add(player.mesh.group);
 
 /* ============ FIRST-PERSON VIEWMODEL & CAMERA MODES ================ */
@@ -2135,8 +2218,14 @@ function hideMuzzleFlashes() {
 
 function curWeapon() { return WEAPONS[player.cur]; }
 function curWState() { return player.weapons[player.cur]; }
-function magSizeOf(i) { return Math.ceil(WEAPONS[i].mag * (player.upgrades.mag ? 1.5 : 1)); }
+function magSizeOf(i) {
+  let m = WEAPONS[i].mag * (player.upgrades.mag ? 1.5 : 1);
+  if (weaponMods[i] && weaponMods[i].mag) m *= 1.4;   // extended mag
+  return Math.ceil(m);
+}
 function dmgMult() { return player.upgrades.dmg ? 1.25 : 1; }
+function weaponDmgMult(i) { return (weaponMods[i] && weaponMods[i].dmg) ? 1.3 : 1; }
+function weaponSpread(w, i) { return (weaponMods[i] && weaponMods[i].scope) ? w.spread * 0.4 : w.spread; }
 function speedMult() { return player.upgrades.spd ? 1.12 : 1; }
 function costMult() { return player.upgrades.bld ? 0.75 : 1; }
 
@@ -2416,10 +2505,11 @@ function tryShoot() {
   const tip = gunTipWorld();
   for (let p = 0; p < w.pellets; p++) {
     shootRay.setFromCamera({ x: 0, y: 0 }, camera);
-    if (w.spread > 0) {
-      shootRay.ray.direction.x += rand(-w.spread, w.spread);
-      shootRay.ray.direction.y += rand(-w.spread, w.spread);
-      shootRay.ray.direction.z += rand(-w.spread, w.spread);
+    const spread = weaponSpread(w, player.cur);
+    if (spread > 0) {
+      shootRay.ray.direction.x += rand(-spread, spread);
+      shootRay.ray.direction.y += rand(-spread, spread);
+      shootRay.ray.direction.z += rand(-spread, spread);
       shootRay.ray.direction.normalize();
     }
     shootRay.far = w.range;
@@ -2434,12 +2524,16 @@ function tryShoot() {
       let o = eHits[0].object;
       while (o && !o.userData.enemy) o = o.parent;
       if (o) hitEnemy = o.userData.enemy;
-    } else if (wHits.length) hitPoint = wHits[0].point;
+    } else if (wHits.length) {
+      hitPoint = wHits[0].point;
+      const dest = wHits[0].object.userData.dest;   // breakable crate?
+      if (dest) damageBreakable(dest, Math.round(w.dmg * dmgMult()));
+    }
     spawnTracer(tip, hitPoint, w.tracer);
     spawnImpact(hitPoint, hitEnemy ? 0xff8a5c : 0xd8c8b8);
     if (p === 0) netFire(tip, hitPoint, w.tracer);   // share the shot in co-op
     if (hitEnemy) {
-      const dmg = Math.round(w.dmg * dmgMult());
+      const dmg = Math.round(w.dmg * dmgMult() * weaponDmgMult(player.cur));
       damageEnemy(hitEnemy, dmg);
       spawnDamageNumber(hitPoint, dmg);
       flashHitmarker();
@@ -2597,7 +2691,7 @@ function updateEnemyProjectiles(dt) {
 }
 function damagePlayer(dmg) {
   if (game.state !== 'playing' || player.invuln > 0) return;
-  player.health -= dmg;
+  player.health -= dmg * ngDmgMult();   // New Game+ makes hits hurt more
   player.hurtCd = 0.4;
   SFX.hurt();
   const v = $('damage-vignette');
@@ -2749,7 +2843,7 @@ function spawnEnemy(type, x, z) {
     : buildStalkerMesh(type === 'heavy' ? 1.45 : 1, type === 'heavy');
   const e = {
     type, T, alive: true, mesh: built.group, parts: built,
-    hp: T.hp, maxHp: T.hp, speed: T.speed,
+    hp: Math.round(T.hp * ngHpMult()), maxHp: Math.round(T.hp * ngHpMult()), speed: T.speed,
     state: 'patrol',
     home: new THREE.Vector3(x, 0, z),
     wp: new THREE.Vector3(x + rand(-10, 10), 0, z + rand(-10, 10)),
@@ -3608,8 +3702,40 @@ function completeMission(id) {
   else if (id === 'warlord') {
     player.res.cores += 3; player.res.m += 25; player.res.e += 15;
     setTimeout(() => showToast('Duskwell is free — loot the war chest at the camp (E)'), 2600);
+    // final mission clears the campaign → offer New Game+ once all done
+    setTimeout(offerNewGamePlus, 6000);
   }
   updateCountersUI(); updateMissionTracker();
+  saveGame(true);
+}
+// New Game+ — replay the campaign at a higher difficulty tier, keeping
+// weapons, upgrades, mods, resources and discovered shards.
+function offerNewGamePlus() {
+  if (game.state !== 'playing') return;
+  if (!MISSIONS.every(m => missionState[m.id].done)) return;
+  ngPlus++;
+  showMessage('★ NEW GAME+ ' + ngPlus + ' ★ The Wilds grow deadlier — your gear carries over');
+  SFX.powerup();
+  // reset the campaign state
+  for (const m of MISSIONS) {
+    const ms = missionState[m.id];
+    ms.progress = 0; ms.done = false;
+    ms.locked = !!m.locked;
+  }
+  defendWaveStarted = false; raiderLootFound = false;
+  cacheFound = false; bridgeBuilt = false;
+  for (const p of pylons) {
+    p.active = false;
+    p.coilMat.color.setHex(0x5a1414);
+    p.coilMat.emissive.setHex(0xff2a3c);
+    p.coilMat.emissiveIntensity = 0.5;
+  }
+  for (const c of wildlife) c.scanned = false;
+  // clear the field and re-seed enemies at the tougher tier
+  for (const e of enemies) if (e.alive) { e.alive = false; scene.remove(e.mesh); }
+  enemiesSpawned = false;
+  seedEnemies();
+  updateMissionTracker(); updateCountersUI();
   saveGame(true);
 }
 function onEnemyKilled(e) {
@@ -3642,6 +3768,16 @@ function addLore(txt) {
   if (loreEntries.includes(txt)) return;
   loreEntries.push(txt);
 }
+// audio logs — speak a lore line via the Web Speech API (respects music volume)
+function speakLog(txt) {
+  try {
+    if (!('speechSynthesis' in window) || settings.music <= 0) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(txt.replace(/[“”"]/g, ''));
+    u.rate = 0.95; u.pitch = 0.85; u.volume = clamp(settings.music / 100, 0, 1);
+    window.speechSynthesis.speak(u);
+  } catch (e) { /* TTS unavailable */ }
+}
 function updateSecrets(dt) {
   secretMeshes.forEach((m, i) => {
     if (!m) return;
@@ -3654,6 +3790,7 @@ function updateSecrets(dt) {
       recShard();
       player.res.cores++;
       addLore(SECRETS[i].lore);
+      speakLog(SECRETS[i].lore);   // shards play as spoken audio logs
       SFX.core();
       showMessage('◆ DATA SHARD FOUND (' + secretsFound.length + '/8) — +1 data core');
       emit(m.position, 0xffd166, 12, 3, 0.8, 0.8, 0.15);
@@ -3829,6 +3966,7 @@ function saveGame(silent) {
     pylons: pylons.map(p => p.active),
     bridgeBuilt, cacheFound, raiderLootFound,
     clock: Math.round(dayClock), inv: inventory, companion: hasCompanion,
+    mods: weaponMods, ngPlus,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) {}
   if (!silent) showToast('💾 Game saved');
@@ -3871,6 +4009,8 @@ function loadGame() {
   raiderLootFound = !!d.raiderLootFound;
   dayClock = d.clock != null ? d.clock : 55;
   Object.assign(inventory, d.inv || {});
+  if (d.mods) d.mods.forEach((m, i) => { if (weaponMods[i]) Object.assign(weaponMods[i], m); });
+  ngPlus = d.ngPlus || 0;
   if (d.companion) spawnCompanion(false);
   return true;
 }
@@ -3951,7 +4091,13 @@ function renderJournal() {
     for (const l of loreEntries) {
       const div = document.createElement('div');
       div.className = 'lore-row';
-      div.textContent = l;
+      const play = document.createElement('button');
+      play.textContent = '🔊';
+      play.title = 'Play audio log';
+      play.style.cssText = 'pointer-events:auto;cursor:pointer;margin-right:8px;background:none;border:none;font-size:13px';
+      play.addEventListener('click', () => speakLog(l));
+      div.appendChild(play);
+      div.appendChild(document.createTextNode(l));
       jl.appendChild(div);
     }
   }
@@ -4013,6 +4159,28 @@ setInterval(() => {
 $('menu-tip').innerHTML = TIPS[0];
 
 let enemiesSpawned = false;
+function seedEnemies() {
+  if (enemiesSpawned) return;
+  enemiesSpawned = true;
+  // initial patrols around the tower (mission: Secure the Outpost)
+  [[-48, -20, 'stalker'], [-12, -55, 'stalker'], [-52, -48, 'stalker'],
+   [4, -30, 'wasp'], [-40, 2, 'wasp'], [-16, -14, 'stalker']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
+  // wilder spawns farther out
+  [[90, -40, 'scout'], [-100, -60, 'exploder'], [100, 90, 'heavy'],
+   [-90, 90, 'sniper'], [60, -110, 'wasp'], [0, 120, 'scout']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
+  // raider camp garrison — the Warlord holds court until his mission is done
+  const rc = RAIDER_CAMP;
+  if (!missionState.warlord.done) {
+    spawnEnemy('warlord', rc.x, rc.z - 3);
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2 + 0.4;
+      spawnEnemy('raider', rc.x + Math.cos(a) * 9, rc.z + Math.sin(a) * 9);
+    }
+  } else {
+    spawnEnemy('raider', rc.x + 8, rc.z + 8);   // stragglers
+    spawnEnemy('raider', rc.x - 8, rc.z - 8);
+  }
+}
 function startGame(fromSave) {
   SFX.init(); SFX.resume();
   if (!fromSave) {
@@ -4029,27 +4197,7 @@ function startGame(fromSave) {
     if (!ok) { spawnSecrets([]); }
     else spawnSecrets(secretsFound);
   }
-  if (!enemiesSpawned) {
-    enemiesSpawned = true;
-    // initial patrols around the tower (mission: Secure the Outpost)
-    [[-48, -20, 'stalker'], [-12, -55, 'stalker'], [-52, -48, 'stalker'],
-     [4, -30, 'wasp'], [-40, 2, 'wasp'], [-16, -14, 'stalker']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
-    // wilder spawns farther out
-    [[90, -40, 'scout'], [-100, -60, 'exploder'], [100, 90, 'heavy'],
-     [-90, 90, 'sniper'], [60, -110, 'wasp'], [0, 120, 'scout']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
-    // raider camp garrison — the Warlord holds court until his mission is done
-    const rc = RAIDER_CAMP;
-    if (!missionState.warlord.done) {
-      spawnEnemy('warlord', rc.x, rc.z - 3);
-      for (let i = 0; i < 4; i++) {
-        const a = i * Math.PI / 2 + 0.4;
-        spawnEnemy('raider', rc.x + Math.cos(a) * 9, rc.z + Math.sin(a) * 9);
-      }
-    } else {
-      spawnEnemy('raider', rc.x + 8, rc.z + 8);   // stragglers
-      spawnEnemy('raider', rc.x - 8, rc.z - 8);
-    }
-  }
+  seedEnemies();
   spawnVillagers();
   showScreen('');
   $('hud').style.display = 'block';
@@ -4190,6 +4338,13 @@ function animate() {
     updateEvents(dt);
     updateCompanion(dt);
     updateNPCs(dt);
+    // dynamic combat music: intensity rises with nearby engaged enemies
+    let threat = 0;
+    for (const e of enemies)
+      if (e.alive && (e.state === 'chase' || e.state === 'attack') &&
+          e.mesh.position.distanceTo(player.pos) < 55)
+        threat += e.T.boss ? 0.6 : 0.22;
+    SFX.setCombat(clamp(threat, 0, 1));
     updateMinimap();
 
     sun.target.position.set(player.pos.x, 0, player.pos.z);
@@ -4698,8 +4853,12 @@ function renderInventory() {
         '</div><div class="idesc">Locked — complete missions to unlock.</div></div>'));
       return;
     }
+    const md = weaponMods[i];
+    const badges = [md.dmg ? '⊕DMG' : '', md.mag ? '⊕MAG' : '', md.scope ? '⊕SCOPE' : '']
+      .filter(Boolean).join(' ');
     const row = invRow('<div><div class="iname">' + w.name + (i === player.cur ? ' — EQUIPPED' : '') +
-      '</div><div class="idesc">Damage ' + Math.round(w.dmg * dmgMult()) +
+      (badges ? ' <span style="color:#c8f05a;font-size:10px">' + badges + '</span>' : '') +
+      '</div><div class="idesc">Damage ' + Math.round(w.dmg * dmgMult() * weaponDmgMult(i)) +
       (w.pellets > 1 ? ' ×' + w.pellets : '') + ' · Mag ' + magSizeOf(i) +
       ' · Reserve ' + ws.reserve + '</div></div>');
     if (i === player.cur) row.classList.add('equipped');
@@ -4710,6 +4869,26 @@ function renderInventory() {
       row.appendChild(eq);
     }
     wl.appendChild(row);
+    // attachment bench — install mods with ◆ data cores
+    for (const [key, label, cost] of [['dmg', '⊕ Damage', 1], ['mag', '⊕ Ext. Mag', 1], ['scope', '⊕ Scope', 1]]) {
+      const has = !!md[key];
+      const mrow = invRow('<div style="padding-left:14px"><div class="iname" style="font-size:12px">' + label +
+        '</div><div class="idesc">' + (key === 'dmg' ? '+30% damage' : key === 'mag' ? '+40% magazine' : '−60% spread') +
+        ' — ' + (has ? 'installed' : cost + ' ◆') + '</div></div>');
+      if (!has) {
+        const btn = document.createElement('button');
+        btn.textContent = 'INSTALL';
+        btn.disabled = player.res.cores < cost;
+        btn.addEventListener('click', () => {
+          if (player.res.cores < cost) { SFX.deny(); return; }
+          player.res.cores -= cost; md[key] = 1;
+          SFX.powerup();
+          updateCountersUI(); updateAmmoUI(); renderInventory(); saveGame(true);
+        });
+        mrow.appendChild(btn);
+      } else mrow.classList.add('equipped');
+      wl.appendChild(mrow);
+    }
   });
   $('inv-keys').innerHTML =
     '<div class="inv-row"><div><div class="iname">◆ Data Shards</div><div class="idesc">Hidden across the Wilds.</div></div><span class="icount">' + secretsFound.length + ' / 8</span></div>' +

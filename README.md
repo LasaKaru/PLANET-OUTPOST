@@ -1,7 +1,8 @@
 # HELAO2: Planet Outpost
 
 A low-poly sci-fi adventure shooter on a vibrant alien planet — exploration,
-missions, base-building, wildlife scanning, secrets, and **co-op multiplayer**.
+missions, base-building, weapon mods, day/night, a boss & settlements,
+wildlife scanning, secrets, New Game+, and **co-op multiplayer**.
 Built with Three.js (r128) and a tiny Node + `ws` relay server. By **HelaO2 Studio**.
 
 ## Play solo (no server needed)
