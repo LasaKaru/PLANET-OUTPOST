@@ -5490,6 +5490,158 @@ document.addEventListener('keydown', e => {
 makeRover(CAMPER_POS.x - 10, CAMPER_POS.z + 6);
 makeShip(-40, 74);   // on the landing pad
 
+/* =====================================================================
+   MOBILE / TOUCH CONTROLS — a left virtual joystick for movement, a
+   right-side drag zone for aiming, and on-screen action buttons, so
+   Android / iOS players can play without a keyboard. Auto-enabled on
+   touch devices; the same functions the keyboard uses are reused.
+   ===================================================================== */
+(function touchControls() {
+  const isTouch = ('ontouchstart' in window) ||
+    (navigator.maxTouchPoints > 0) || matchMedia('(pointer: coarse)').matches;
+  if (isTouch) document.body.classList.add('touch');
+
+  const tc     = $('touch-controls');
+  const joyZone = $('tc-joy'), joyBase = $('tc-joy-base'), joyKnob = $('tc-joy-knob');
+  const lookZone = $('tc-look');
+  if (!tc) return;
+
+  const MOVE_KEYS = ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'ShiftLeft'];
+  function clearMoveKeys() { for (const k of MOVE_KEYS) keys[k] = false; }
+
+  /* ---------- virtual joystick (movement) ---------- */
+  let joyId = null, joyOX = 0, joyOY = 0;
+  joyZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (joyId !== null) return;
+    const t = e.changedTouches[0];
+    joyId = t.identifier; joyOX = t.clientX; joyOY = t.clientY;
+    joyBase.style.left = joyOX + 'px'; joyBase.style.top = joyOY + 'px';
+    joyBase.classList.add('on');
+    joyKnob.style.transform = 'translate(0,0)';
+  }, { passive: false });
+  joyZone.addEventListener('touchmove', e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== joyId) continue;
+      e.preventDefault();
+      let dx = t.clientX - joyOX, dy = t.clientY - joyOY;
+      const R = 60, mag = Math.hypot(dx, dy);
+      if (mag > R) { dx *= R / mag; dy *= R / mag; }
+      joyKnob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+      const nx = dx / R, ny = -dy / R;              // ny up = +
+      keys['KeyW'] = ny > 0.35; keys['KeyS'] = ny < -0.35;
+      keys['KeyD'] = nx > 0.35; keys['KeyA'] = nx < -0.35;
+      keys['ShiftLeft'] = Math.hypot(nx, ny) > 0.92;   // push to the edge to sprint
+    }
+  }, { passive: false });
+  function endJoy(e) {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== joyId) continue;
+      joyId = null; joyBase.classList.remove('on');
+      joyKnob.style.transform = 'translate(0,0)';
+      clearMoveKeys();
+    }
+  }
+  joyZone.addEventListener('touchend', endJoy);
+  joyZone.addEventListener('touchcancel', endJoy);
+
+  /* ---------- look / aim drag (right zone) ---------- */
+  let lookId = null, lookX = 0, lookY = 0;
+  lookZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (lookId !== null) return;
+    const t = e.changedTouches[0];
+    lookId = t.identifier; lookX = t.clientX; lookY = t.clientY;
+  }, { passive: false });
+  lookZone.addEventListener('touchmove', e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== lookId) continue;
+      e.preventDefault();
+      const dx = t.clientX - lookX, dy = t.clientY - lookY;
+      lookX = t.clientX; lookY = t.clientY;
+      const s = 0.006 * (settings.sens / 100);        // touch a touch more sensitive
+      if (activeVehicle) {
+        activeVehicle.yaw -= dx * s;
+        if (activeVehicle.kind === 'ship')
+          activeVehicle.pitch = clamp(activeVehicle.pitch - (settings.invertY ? -dy : dy) * s * 0.85, -0.9, 0.9);
+      } else {
+        player.yaw -= dx * s;
+        player.pitch += (settings.invertY ? -dy : dy) * s * 0.92;
+        player.pitch = clamp(player.pitch, -0.6, 0.9);
+      }
+    }
+  }, { passive: false });
+  function endLook(e) {
+    for (const t of e.changedTouches) if (t.identifier === lookId) lookId = null;
+  }
+  lookZone.addEventListener('touchend', endLook);
+  lookZone.addEventListener('touchcancel', endLook);
+
+  /* ---------- action buttons ---------- */
+  const HOLD = { fire: 1, jump: 1, down: 1 };   // press-and-hold buttons
+  document.querySelectorAll('#touch-controls .tc-btn[data-act]').forEach(btn => {
+    const act = btn.dataset.act;
+    btn.addEventListener('touchstart', e => {
+      e.preventDefault(); e.stopPropagation();
+      doAction(act, true);
+    }, { passive: false });
+    if (HOLD[act]) {
+      const up = e => { e.preventDefault(); doAction(act, false); };
+      btn.addEventListener('touchend', up);
+      btn.addEventListener('touchcancel', up);
+    }
+  });
+  function doAction(act, down) {
+    switch (act) {
+      case 'fire':
+        if (down) { if (buildMode) placeBuild(); else mouseDown = true; }
+        else mouseDown = false;
+        break;
+      case 'jump': keys['Space'] = down; break;
+      case 'down': keys['KeyC'] = down; break;
+      case 'reload':    if (down) startReload(); break;
+      case 'interact':  if (down) tryInteract(); break;
+      case 'build':     if (down) toggleBuildMode(); break;
+      case 'scan':      if (down) tryScan(); break;
+      case 'cam':       if (down) toggleCamMode(); break;
+      case 'journal':   if (down) (game.state === 'journal' ? closeJournal() : openJournal()); break;
+      case 'inventory': if (down) (game.state === 'inventory' ? closeInventory() : openInventory()); break;
+      case 'console':   if (down) openConsole(); break;
+      case 'pause':     if (down) (game.state === 'paused' ? resumeGame() : pauseGame()); break;
+    }
+  }
+
+  /* ---------- make HUD weapon slots & build items tappable ---------- */
+  for (let i = 0; i < 4; i++) {
+    const el = $('wslot-' + i);
+    if (el) { el.style.pointerEvents = 'auto';
+      el.addEventListener('click', () => switchWeapon(i)); }
+  }
+  for (let i = 0; i < 8; i++) {
+    const el = $('build-' + i);
+    if (el) { el.style.pointerEvents = 'auto';
+      el.addEventListener('click', () => { if (buildMode) selectBuild(i); }); }
+  }
+
+  /* ---------- show controls only while actually playing ---------- */
+  function refresh() {
+    if (!document.body.classList.contains('touch')) return;
+    const playing = game.state === 'playing';
+    tc.classList.toggle('on', playing);
+    const portrait = window.innerHeight > window.innerWidth;
+    document.body.classList.toggle('portrait', portrait);
+    if (!playing) { clearMoveKeys(); mouseDown = false; keys['Space'] = false; keys['KeyC'] = false; }
+  }
+  setInterval(refresh, 160);
+  window.addEventListener('resize', refresh);
+  refresh();
+
+  // stop the page itself from scrolling / rubber-banding under the game
+  document.addEventListener('touchmove', e => {
+    if (game.state === 'playing') e.preventDefault();
+  }, { passive: false });
+})();
+
 animate();
 
 })();

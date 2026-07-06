@@ -2,12 +2,45 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0e0c0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Outpost">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="icon" type="image/png" href="assets/icon-192.png">
 <title>HELAO2: Planet Outpost</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <canvas id="game-canvas"></canvas>
+
+<!-- ==================== TOUCH CONTROLS (mobile) ==================== -->
+<div id="touch-controls">
+  <div id="tc-look"></div>
+  <div id="tc-joy"><div id="tc-joy-base"><div id="tc-joy-knob"></div></div></div>
+  <div id="tc-actions">
+    <button class="tc-btn tc-fire" data-act="fire">FIRE</button>
+    <button class="tc-btn tc-up" data-act="jump">⤒</button>
+    <button class="tc-btn tc-down" data-act="down">⤓</button>
+    <button class="tc-btn" data-act="reload">⟳</button>
+    <button class="tc-btn tc-e" data-act="interact">E</button>
+  </div>
+  <div id="tc-side">
+    <button class="tc-btn sm" data-act="build">B</button>
+    <button class="tc-btn sm" data-act="scan">Q</button>
+    <button class="tc-btn sm" data-act="cam">V</button>
+  </div>
+  <div id="tc-top">
+    <button class="tc-btn sm" data-act="journal">☰</button>
+    <button class="tc-btn sm" data-act="inventory">🎒</button>
+    <button class="tc-btn sm" data-act="console">⌨</button>
+    <button class="tc-btn sm" data-act="pause">II</button>
+  </div>
+</div>
+<div id="rotate-hint">↻ Rotate your device to landscape to play</div>
 
 <!-- ==================== HUD ==================== -->
 <div id="hud">
@@ -248,6 +281,12 @@
   </div>
 </div>
 
+<script>
+  // PWA: register the service worker (only over http/https, not file://)
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="js/net.js"></script>
 <script src="js/game.js"></script>

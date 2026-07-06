@@ -240,3 +240,85 @@ html,body { width:100%; height:100%; overflow:hidden; background:#151019;
   color:var(--lime); font-family:'Consolas',monospace; font-size:15px; letter-spacing:2px;
   box-shadow:0 0 20px var(--lime-glow); outline:none; }
 #cmd-console::placeholder { color:#6a7a52; letter-spacing:1px; font-size:12px; }
+
+/* ============================================================
+   MOBILE / TOUCH CONTROLS + PWA
+   ============================================================ */
+html, body { touch-action: none; -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none; overscroll-behavior: none; }
+
+#touch-controls { position:fixed; inset:0; z-index:12; display:none; pointer-events:none; }
+body.touch #touch-controls.on { display:block; }
+
+/* left-half look-ahead not needed; the look zone is on the right */
+#tc-look { position:absolute; right:0; top:0; width:54%; height:100%; pointer-events:auto; }
+#tc-joy  { position:absolute; left:0; bottom:0; width:46%; height:62%; pointer-events:auto; }
+#tc-joy-base { position:absolute; width:132px; height:132px; margin:-66px 0 0 -66px;
+  border-radius:50%; border:2px solid rgba(200,240,90,0.45); background:rgba(10,14,10,0.28);
+  opacity:0; transition:opacity .12s; }
+#tc-joy-base.on { opacity:1; }
+#tc-joy-knob { position:absolute; left:50%; top:50%; width:58px; height:58px; margin:-29px 0 0 -29px;
+  border-radius:50%; background:rgba(200,240,90,0.32); border:2px solid var(--lime);
+  box-shadow:0 0 14px var(--lime-glow); }
+
+.tc-btn { pointer-events:auto; position:absolute; border-radius:50%; border:2px solid rgba(200,240,90,0.5);
+  background:rgba(12,16,10,0.5); color:var(--lime); font-weight:800; letter-spacing:1px;
+  display:flex; align-items:center; justify-content:center; font-size:15px; -webkit-user-select:none;
+  user-select:none; }
+.tc-btn:active { background:rgba(200,240,90,0.28); transform:scale(0.94); }
+.tc-btn.sm { width:44px; height:44px; font-size:16px; position:relative; }
+
+#tc-actions { position:absolute; right:20px; bottom:20px; width:230px; height:220px; pointer-events:none; }
+#tc-actions .tc-btn { pointer-events:auto; }
+.tc-fire { width:96px; height:96px; right:4px; bottom:6px; font-size:18px;
+  color:#ff9a8a; border-color:rgba(255,120,110,0.7); background:rgba(60,16,16,0.5); }
+.tc-fire:active { background:rgba(255,90,80,0.35); }
+.tc-up   { width:60px; height:60px; right:112px; bottom:96px; }
+.tc-down { width:56px; height:56px; right:118px; bottom:26px; }
+.tc-btn[data-act="reload"] { width:54px; height:54px; right:8px; bottom:112px; }
+.tc-e    { width:60px; height:60px; right:180px; bottom:44px;
+  color:var(--amber); border-color:rgba(255,209,102,0.6); }
+
+#tc-side { position:absolute; right:20px; top:50%; transform:translateY(-40%);
+  display:flex; flex-direction:column; gap:10px; pointer-events:none; }
+#tc-top  { position:absolute; left:50%; top:8px; transform:translateX(-50%);
+  display:flex; gap:9px; pointer-events:none; }
+
+#rotate-hint { position:fixed; inset:0; z-index:60; display:none; align-items:center;
+  justify-content:center; background:#0e0c0a; color:var(--lime); font-size:18px;
+  letter-spacing:2px; text-align:center; padding:0 30px; }
+body.touch.portrait #rotate-hint { display:flex; }
+
+/* on phones, tighten the HUD so it fits small landscape screens */
+@media (max-width: 900px), (pointer: coarse) {
+  #minimap { width:120px; height:120px; top:96px; right:12px; }
+  #minimap { image-rendering:auto; }
+  #top-left { font-size:11px; padding:7px 11px; }
+  #bottom-left { min-width:170px; padding:9px 12px; }
+  #bottom-right { min-width:150px; padding:8px 12px; }
+  #ammo-count { font-size:26px; }
+  #online-ind, #cam-ind, #time-ind { font-size:9px; padding:5px 9px; }
+  #mission-tracker { font-size:11px; max-width:52%; padding:7px 12px; }
+  #menu-title { font-size:34px; letter-spacing:6px; }
+  .menu-btns { width:210px; }
+  .vbtn { font-size:11px; padding:8px 0; }
+  #menu-controls { display:none; }
+  #build-menu { bottom:150px; max-width:96vw; }
+  .build-item { width:76px; font-size:10px; }
+}
+
+/* ---- refined mobile HUD layout so touch buttons don't overlap ---- */
+@media (pointer: coarse), (max-width: 900px) {
+  /* top utility toolbar, centered above the mission line */
+  #tc-top { top:6px; left:50%; transform:translateX(-50%); gap:8px; }
+  #tc-side { top:6px; right:12px; bottom:auto; transform:none; flex-direction:row; gap:8px; }
+  #mission-tracker { top:56px; }
+  /* ammo panel to bottom-centre, clear of the FIRE cluster */
+  #bottom-right { left:50%; right:auto; transform:translateX(-50%); bottom:12px; text-align:center; min-width:120px; }
+  #weapon-slots { justify-content:center; }
+  /* minimap + status chips sit just under the toolbar on the right */
+  #online-ind { top:56px; } #cam-ind { top:86px; } #time-ind { top:112px; }
+  #minimap { top:140px; }
+  /* hull bar shorter so the joystick has room */
+  #bottom-left { min-width:150px; }
+}

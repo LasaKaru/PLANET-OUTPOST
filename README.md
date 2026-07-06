@@ -10,6 +10,23 @@ Built with Three.js (r128) and a tiny Node + `ws` relay server. By **HelaO2 Stud
 Open `index.html` in any modern browser. Everything except multiplayer works
 offline — saves live in your browser's localStorage.
 
+## Play on mobile (Android / iOS)
+
+Serve the game over http (`node server.js`) and open it in the phone's browser,
+then **Add to Home Screen** — it installs as a fullscreen app (PWA) and works
+offline after the first load.
+
+On touch devices the game shows on-screen controls automatically:
+
+- **Left thumb** — virtual joystick to move (push to the edge to sprint)
+- **Right thumb** — drag anywhere to aim/look
+- **FIRE** button, plus **E** interact, **↑** jump / ship-up, **↓** ship-down,
+  **⟳** reload, and **B / Q / V** for build / scan / camera
+- Top toolbar: journal, inventory, cheat console, pause
+- Tap the ammo slots (1–4) to switch weapons
+
+Landscape orientation is recommended (a hint appears in portrait).
+
 ## Play multiplayer (co-op)
 
 ```bash
