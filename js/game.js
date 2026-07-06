@@ -853,6 +853,17 @@ function spawnPickup(kind, x, z) {
       p.position.set(rand(-0.4, 0.4), 0.3, rand(-0.4, 0.4));
       p.scale.y = 1.3; g.add(p);
     }
+  } else if (kind === 'medkit') {
+    // white medipack case with a glowing red cross
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.5), mat(0xf0ece4));
+    box.position.y = 0.3; g.add(box);
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.12, 0.54), mat(0xd94f5a));
+    lid.position.y = 0.56; g.add(lid);
+    const crossMat = mat(0xff4a5c, { emissive: 0xff2a3c, emissiveIntensity: 1.2 });
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.06), crossMat);
+    c1.position.set(0, 0.3, 0.27); g.add(c1);
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.34, 0.06), crossMat);
+    c2.position.set(0, 0.3, 0.27); g.add(c2);
   } else { // ammo
     const b = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.6, 0.6), MAT.grayDark);
     b.position.y = 0.3; g.add(b);
@@ -865,7 +876,7 @@ function spawnPickup(kind, x, z) {
 }
 function scatterPickups() {
   const half = WORLD_SIZE / 2 - 10;
-  const kinds = [['energy', 30], ['metal', 24], ['bio', 18], ['ammo', 14]];
+  const kinds = [['energy', 34], ['metal', 28], ['bio', 20], ['ammo', 16], ['medkit', 14]];
   for (const [kind, n] of kinds)
     for (let i = 0; i < n; i++) {
       const x = rand(-half, half), z = rand(-half, half);
@@ -933,7 +944,7 @@ buildRoad([[TOWER_POS.x, TOWER_POS.z], [-55, -10], [-78, 16]]);
 (function forest() {
   let placed = 0, guard = 0;
   const half = WORLD_SIZE / 2 - 8;
-  while (placed < 150 && guard++ < 1200) {
+  while (placed < 210 && guard++ < 1700) {
     const x = rand(-half, half), z = rand(-half, half);
     if (Math.hypot(x - TOWER_POS.x, z - TOWER_POS.z) < 26) continue;
     if (Math.hypot(x - CAMPER_POS.x, z - CAMPER_POS.z) < 14) continue;
@@ -982,7 +993,7 @@ function clearOfSites(x, z, roadMin = 3) {
 
 /* ---- tall stalk trees (splash-art style: blob canopy on thin trunk) */
 (function stalkForest() {
-  const N = 300;
+  const N = 420;
   const trunkGeo2 = new THREE.CylinderGeometry(0.09, 0.14, 1, 4);
   const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
   const trunkInst = new THREE.InstancedMesh(trunkGeo2, MAT.trunk, N);
@@ -1084,7 +1095,7 @@ function clearOfSites(x, z, roadMin = 3) {
 (function moreNature() {
   const half = WORLD_SIZE / 2 - 8;
   let placed = 0, guard = 0;
-  while (placed < 100 && guard++ < 1300) {
+  while (placed < 150 && guard++ < 1900) {
     const x = rand(-half, half), z = rand(-half, half);
     if (!clearOfSites(x, z, 4)) continue;
     makeTree(x, z, rand(0.8, 1.7)); placed++;
@@ -1719,7 +1730,7 @@ function makeRuin(x, z) {
 
 /* ---- spire-tree groves (tall stacked-cone pines, instanced) ---- */
 (function spireGroves() {
-  const N = 90;
+  const N = 140;
   const trunkI = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.2, 1, 5), MAT.trunk, N);
   const spireI = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 6), mat(0xffffff), N);
   const cols = [0x2f8f7a, 0x3fae74, 0x3fbfae, 0xd9a53a].map(c => new THREE.Color(c));
@@ -1948,6 +1959,119 @@ function damageBreakable(entry, dmg) {
  [80, -20], [-30, 90], [60, -80], [110, 60], [-100, 10], [20, -60]]
   .forEach(([x, z]) => makeBreakableCrate(x, z));
 
+/* =====================================================================
+   EXTRA FOLIAGE PASS — berry bushes, fallen mossy logs, fern clusters
+   and drifting pollen motes to thicken the wilds between the trees.
+   ===================================================================== */
+
+/* ---- berry bushes: a leafy blob with glowing berries (instanced) ---- */
+(function berryBushes() {
+  const N = 130;
+  const leafGeo = new THREE.IcosahedronGeometry(0.6, 0);
+  const leafI = new THREE.InstancedMesh(leafGeo, mat(0xffffff), N);
+  const cols = [0x2f8f5a, 0x3faE6a, 0x4a7f3a, 0xd94f8a].map(c => new THREE.Color(c));
+  const berryI = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.12, 0),
+    mat(0xe8506a, { emissive: 0xe8506a, emissiveIntensity: 0.5 }), N * 3);
+  const dummy = new THREE.Object3D();
+  let i = 0, b = 0, guard = 0;
+  const half = WORLD_SIZE / 2 - 8;
+  while (i < N && guard++ < 1600) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (!clearOfSites(x, z, 3)) continue;
+    const gy = terrainHeight(x, z), s = rand(0.7, 1.3);
+    dummy.position.set(x, gy + 0.45 * s, z);
+    dummy.scale.set(s, s * 0.8, s);
+    dummy.rotation.set(rand(0, 0.4), rand(0, Math.PI), 0);
+    dummy.updateMatrix(); leafI.setMatrixAt(i, dummy.matrix);
+    leafI.setColorAt(i, pick(cols));
+    for (let k = 0; k < 3; k++) {
+      dummy.position.set(x + rand(-0.5, 0.5) * s, gy + rand(0.3, 0.7) * s, z + rand(-0.5, 0.5) * s);
+      dummy.scale.setScalar(rand(0.8, 1.3));
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix(); berryI.setMatrixAt(b++, dummy.matrix);
+    }
+    circleColliders.push({ x, z, r: 0.35 * s });
+    i++;
+  }
+  leafI.count = i; berryI.count = b;
+  if (leafI.instanceColor) leafI.instanceColor.needsUpdate = true;
+  leafI.castShadow = true;
+  scene.add(leafI); scene.add(berryI);
+})();
+
+/* ---- fallen mossy logs (loot-free scenery cover) ---- */
+(function fallenLogs() {
+  const half = WORLD_SIZE / 2 - 10;
+  for (let n = 0; n < 22; n++) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (!clearOfSites(x, z, 4)) continue;
+    const g = new THREE.Group();
+    const len = rand(2.5, 4.5);
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, len, 6), MAT.wood);
+    log.rotation.z = Math.PI / 2; log.position.y = 0.34; log.castShadow = true; g.add(log);
+    const moss = new THREE.Mesh(new THREE.BoxGeometry(len * 0.7, 0.12, 0.7), mat(0x3f8f5a));
+    moss.position.y = 0.6; g.add(moss);
+    // a few mushrooms sprouting on it
+    for (let k = 0; k < 3; k++) {
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.2, 5), MAT.cyanGlow);
+      cap.position.set(rand(-len/2, len/2) * 0.7, 0.72, rand(-0.2, 0.2)); g.add(cap);
+    }
+    g.position.set(x, terrainHeight(x, z), z);
+    g.rotation.y = rand(0, Math.PI);
+    scene.add(g);
+    circleColliders.push({ x, z, r: 0.5 });
+    g.traverse(o => { if (o.isMesh) cameraBlockers.push(o); });
+  }
+})();
+
+/* ---- fern clusters (short instanced fronds that sway) ---- */
+(function ferns() {
+  const N = 260;
+  const frond = new THREE.ConeGeometry(0.18, 0.9, 3);
+  frond.translate(0, 0.45, 0);
+  const inst = new THREE.InstancedMesh(frond, makeGrassMaterial(0x2f9f6a), N);
+  const dummy = new THREE.Object3D();
+  let i = 0, guard = 0;
+  const half = WORLD_SIZE / 2 - 8;
+  while (i < N && guard++ < 2000) {
+    const x = rand(-half, half), z = rand(-half, half);
+    if (distToRoad(x, z) < 2.5) continue;
+    dummy.position.set(x, terrainHeight(x, z), z);
+    dummy.scale.set(rand(0.7, 1.4), rand(0.7, 1.3), rand(0.7, 1.4));
+    dummy.rotation.y = rand(0, Math.PI);
+    dummy.updateMatrix(); inst.setMatrixAt(i, dummy.matrix);
+    i++;
+  }
+  inst.count = i;
+  scene.add(inst);
+})();
+
+/* ---- drifting pollen motes near the ground (soft glow) ---- */
+(function pollen() {
+  const N = 90;
+  const pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    pos[i*3] = rand(-70, 70); pos[i*3+1] = rand(0.4, 3.5); pos[i*3+2] = rand(-70, 70);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+    color: 0xfff0b0, size: 0.13, transparent: true, opacity: 0.7, depthWrite: false }));
+  scene.add(pts);
+  envAnims.push((dt, t) => {
+    const cx = camera.position.x, cz = camera.position.z;
+    for (let i = 0; i < N; i++) {
+      pos[i*3+1] += Math.sin(t * 1.3 + i) * dt * 0.4 + dt * 0.15;
+      pos[i*3] += Math.sin(t * 0.5 + i * 0.7) * dt * 0.3;
+      if (pos[i*3+1] > 4) pos[i*3+1] = 0.4;
+      // recycle around the camera
+      if (Math.abs(pos[i*3] - cx) > 70) pos[i*3] = cx + rand(-60, 60);
+      if (Math.abs(pos[i*3+2] - cz) > 70) pos[i*3+2] = cz + rand(-60, 60);
+    }
+    geo.attributes.position.needsUpdate = true;
+  });
+})();
+
 /* ==================== WEAPON MODELS ================================ */
 // Shared by the third-person rig, the first-person viewmodel, and
 // remote co-op players.
@@ -2162,7 +2286,7 @@ const player = {
   pos: new THREE.Vector3(-8, 0, 8),
   velY: 0, grounded: true,
   yaw: 2.4, pitch: -0.12,
-  health: 100, maxHealth: 100,
+  health: 130, maxHealth: 130,
   weapons: WEAPONS.map((w, i) => ({ unlocked: i === 0, mag: w.mag, reserve: w.startReserve })),
   cur: 0,
   reloading: false, reloadT: 0,
@@ -2464,6 +2588,14 @@ function updatePlayer(dt) {
   }
   player.hurtCd = Math.max(0, player.hurtCd - dt);
   player.invuln = Math.max(0, player.invuln - dt);
+  // slow hull regeneration a few seconds after taking damage
+  player.regenT = (player.regenT || 0) + dt;
+  if (player.hurtCd <= 0) {
+    if (player.regenT > 4 && player.health < player.maxHealth) {
+      player.health = Math.min(player.maxHealth, player.health + 4 * dt);
+      updateHealthUI();
+    }
+  } else player.regenT = 0;
 }
 
 /* ====================== SHOOTING =================================== */
@@ -3832,15 +3964,24 @@ function updatePickups(dt) {
       if (c.kind === 'energy') { player.res.e += 3; showToast('+3 energy'); }
       else if (c.kind === 'metal') { player.res.m += 4; showToast('+4 metal'); }
       else if (c.kind === 'bio') { player.res.b += 3; showToast('+3 bio-matter'); }
+      else if (c.kind === 'medkit') {
+        // heal now, and bank one in the inventory for later
+        const heal = Math.min(40, player.maxHealth - player.health);
+        player.health = Math.min(player.maxHealth, player.health + 40);
+        inventory.medkit++;
+        updateHealthUI();
+        SFX.heal();
+        showToast('✚ Medipack — +' + Math.max(heal, 0) + ' hull, +1 stored');
+      }
       else {
         for (let k = 0; k < 4; k++)
           if (player.weapons[k].unlocked) player.weapons[k].reserve += magSizeOf(k);
         showToast('Ammo restocked for all weapons');
         updateAmmoUI();
       }
-      SFX.pickup();
+      if (c.kind !== 'medkit') SFX.pickup();
       updateCountersUI();
-      emit(c.mesh.position, c.kind === 'bio' ? 0xe86a9e : 0x5ff2d0, 7, 3, 0.5, 0.7, 0.2);
+      emit(c.mesh.position, c.kind === 'medkit' ? 0xff4a5c : c.kind === 'bio' ? 0xe86a9e : 0x5ff2d0, 7, 3, 0.5, 0.7, 0.2);
       const kind = c.kind;
       setTimeout(() => {
         const half = WORLD_SIZE / 2 - 10;
@@ -3981,7 +4122,7 @@ function loadGame() {
   Object.assign(player.res, d.res);
   player.kills = d.kills || 0;
   player.upgrades = Object.assign({ vit: 0, dmg: 0, spd: 0, mag: 0, bld: 0 }, d.upgrades);
-  player.maxHealth = 100 + (player.upgrades.vit ? 25 : 0);
+  player.maxHealth = 130 + (player.upgrades.vit ? 25 : 0);
   player.health = clamp(d.health, 1, player.maxHealth);
   d.weapons.forEach((w, i) => Object.assign(player.weapons[i], w));
   player.cur = 0; switchWeapon(d.cur || 0);
@@ -4753,6 +4894,7 @@ function updateMinimap() {
   for (const p of pylons) dot(p.x, p.z, p.active ? '#5ff2d0' : '#68737f', 2.5);
   for (const e of enemies) if (e.alive) dot(e.mesh.position.x, e.mesh.position.z, '#ff4a5c', 2.5);
   for (const w of wildlife) if (!w.fly) dot(w.mesh.position.x, w.mesh.position.z, '#7be08a', 1.5);
+  for (const p of pickups) if (p.kind === 'medkit') dot(p.x, p.z, '#ff6a7a', 2);   // medipacks
   for (let i = 0; i < SECRETS.length; i++)   // shard detector: close range only
     if (secretMeshes[i] && Math.hypot(SECRETS[i].x - px, SECRETS[i].z - pz) < 40)
       dot(SECRETS[i].x, SECRETS[i].z, '#ffd166', 2.5);
