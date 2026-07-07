@@ -2076,6 +2076,101 @@ function damageBreakable(entry, dmg) {
   });
 })();
 
+/* =====================================================================
+   INFECTED NEST — a pulsing organic hive in the far south-east that
+   breeds the infected. It is a destructible mission target: shoot its
+   glowing core to bring it down. Attacking it wakes "The Progenitor",
+   a giant zombie boss that guards the hive.
+   ===================================================================== */
+const NEST_POS = { x: 122, z: -122 };
+let nest = null;
+
+(function buildNest() {
+  const g = new THREE.Group();
+  const flesh = mat(0x6a2438, { roughness: 1 });
+  const flesh2 = mat(0x8a2a3a, { roughness: 1 });
+  const sacMat = mat(0x9a1a2a, { emissive: 0xff2a4a, emissiveIntensity: 0.6 });
+  // lumpy mound
+  const mound = new THREE.Mesh(new THREE.IcosahedronGeometry(4.2, 1), flesh);
+  mound.scale.set(1, 0.7, 1); mound.position.y = 2.2; mound.castShadow = true; g.add(mound);
+  const lumps = [];
+  for (let i = 0; i < 7; i++) {
+    const l = new THREE.Mesh(new THREE.IcosahedronGeometry(rand(1.0, 2.0), 0), flesh2);
+    const a = rand(0, Math.PI * 2), r = rand(1.5, 3.5);
+    l.position.set(Math.cos(a) * r, rand(1.2, 3.6), Math.sin(a) * r);
+    l.castShadow = true; g.add(l); lumps.push(l);
+  }
+  // glowing egg sacs
+  const sacs = [];
+  for (let i = 0; i < 6; i++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(rand(0.5, 0.9), 7, 6), sacMat);
+    const a = rand(0, Math.PI * 2), r = rand(2.6, 4.2);
+    s.position.set(Math.cos(a) * r, rand(0.8, 1.6), Math.sin(a) * r);
+    g.add(s); sacs.push(s);
+  }
+  // exposed glowing core (the weak point)
+  const coreMat = mat(0x7a0a1a, { emissive: 0xff3050, emissiveIntensity: 1.6 });
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.5, 0), coreMat);
+  core.position.y = 3.4; g.add(core);
+  // tendrils
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2;
+    const t = new THREE.Mesh(new THREE.ConeGeometry(0.2, rand(2, 3.5), 4), flesh2);
+    t.position.set(Math.cos(a) * 4, rand(0.8, 1.8), Math.sin(a) * 4);
+    t.rotation.z = Math.cos(a) * 0.5; t.rotation.x = -Math.sin(a) * 0.5; g.add(t);
+  }
+  g.position.set(NEST_POS.x, terrainHeight(NEST_POS.x, NEST_POS.z), NEST_POS.z);
+  scene.add(g);
+  addBoxCollider(NEST_POS.x, NEST_POS.z, 8, 8, 6);
+  nest = { mesh: g, core, coreMat, sacs, lumps, hp: 600, maxHp: 600, alive: true,
+           bossWoken: false, spawnT: 6, blockers: [] };
+  g.traverse(o => {
+    if (o.isMesh) { o.userData.nest = nest; losBlockers.push(o); cameraBlockers.push(o); nest.blockers.push(o); }
+  });
+  // pulsing life
+  envAnims.push((dt, t) => {
+    if (!nest.alive) return;
+    const p = 1 + Math.sin(t * 2.2) * 0.06;
+    nest.core.scale.setScalar(p);
+    nest.coreMat.emissiveIntensity = 1.2 + Math.sin(t * 2.2) * 0.6;
+    for (let i = 0; i < nest.sacs.length; i++)
+      nest.sacs[i].scale.setScalar(1 + Math.sin(t * 3 + i) * 0.12);
+  });
+})();
+
+function damageNest(dmg) {
+  if (!nest || !nest.alive) return;
+  nest.hp -= dmg;
+  nest.coreMat.emissive.setHex(0xffffff);
+  setTimeout(() => { if (nest.alive) nest.coreMat.emissive.setHex(0xff3050); }, 60);
+  emit(nest.core.getWorldPosition(new THREE.Vector3()), 0xff3050, 4, 4, 0.3, 0.7);
+  spawnDamageNumber(nest.core.getWorldPosition(new THREE.Vector3()), dmg);
+  // wake the boss once the hive is hurt
+  if (!nest.bossWoken && nest.hp < nest.maxHp * 0.7) {
+    nest.bossWoken = true;
+    const p = spawnEnemy('progenitor', NEST_POS.x + 6, NEST_POS.z + 4);
+    p.state = 'chase'; p.alerted = true;
+    showMessage('⚠ THE PROGENITOR AWAKENS ⚠');
+    SFX.screech();
+  }
+  if (nest.hp <= 0) destroyNest();
+}
+function destroyNest() {
+  nest.alive = false;
+  SFX.explode(); SFX.splat();
+  const p = nest.mesh.position.clone().add(new THREE.Vector3(0, 3, 0));
+  emit(p, 0xff3050, 26, 9, 1.3, 2.2, 0.2);
+  emit(p, 0x6a2438, 18, 6, 1.6, 1.8, 0.15);
+  // collapse the hive
+  nest.mesh.scale.y = 0.35; nest.mesh.position.y -= 1.2;
+  removeFromArr(losBlockers, nest.blockers);
+  removeFromArr(cameraBlockers, nest.blockers);
+  nest.core.visible = false;
+  for (const s of nest.sacs) s.visible = false;
+  missionProgress('nest', 1);
+  showMessage('✔ THE NEST IS CLEANSED');
+}
+
 /* ==================== WEAPON MODELS ================================ */
 // Shared by the third-person rig, the first-person viewmodel, and
 // remote co-op players.
@@ -2669,8 +2764,11 @@ function tryShoot() {
       if (o) hitEnemy = o.userData.enemy;
     } else if (wHits.length) {
       hitPoint = wHits[0].point;
+      const dmg = Math.round(w.dmg * dmgMult() * weaponDmgMult(player.cur));
       const dest = wHits[0].object.userData.dest;   // breakable crate?
-      if (dest) damageBreakable(dest, Math.round(w.dmg * dmgMult()));
+      if (dest) damageBreakable(dest, dmg);
+      const nst = wHits[0].object.userData.nest;    // infected nest?
+      if (nst && nst.alive) { damageNest(dmg); flashHitmarker(); }
     }
     spawnTracer(tip, hitPoint, w.tracer);
     spawnImpact(hitPoint, hitEnemy ? 0xff8a5c : 0xd8c8b8);
@@ -2864,12 +2962,13 @@ const ETYPES = {
   bloater:  { hp: 150, speed: 1.9, detectR: 22, attackR: 2.4, dmg: 14, ranged: false, zombie: true, bloater: true, drop: [4, 3] },
   brute:    { hp: 340, speed: 2.6, detectR: 24, attackR: 3.0, dmg: 26, ranged: false, zombie: true, brute: true, drop: [8, 5] },
   screamer: { hp: 80,  speed: 3.4, detectR: 32, attackR: 2.2, dmg: 8,  ranged: false, zombie: true, screamer: true, drop: [3, 3] },
+  progenitor:{ hp: 900, speed: 2.2, detectR: 44, attackR: 4.0, dmg: 42, ranged: false, zombie: true, brute: true, boss: true, drop: [30, 20] },
 };
 /* ---- infected humanoids: sickly reskin of the player rig, hunched and
    reaching. Subtypes get belly bulges, mouths, spikes and scale. ---- */
 function buildZombieMesh(kind) {
   const skin = { shambler: 0x6f8f4a, feral: 0x9aae74, bloater: 0x8a9a34,
-                 brute: 0x4d6a38, screamer: 0x7a8f52 }[kind];
+                 brute: 0x4d6a38, screamer: 0x7a8f52, progenitor: 0x7a1a2a }[kind];
   const rot  = 0x3a4a2a;
   const m = buildPlayerMesh(skin, rot);
   m.gunMeshes.forEach(g => g.visible = false);   // no weapons — they claw
@@ -2888,6 +2987,16 @@ function buildZombieMesh(kind) {
     for (const sd of [-1, 1]) {   // bone spurs on the shoulders
       const spur = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.5, 4), mat(0xd8d0c0));
       spur.position.set(sd * 0.6, 2.0, -0.1); spur.rotation.z = -sd * 0.6; g.add(spur);
+    }
+  } else if (kind === 'progenitor') {
+    g.scale.setScalar(2.5);
+    // pulsing heart on the chest + jagged crown
+    const heart = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 0),
+      mat(0x9a0a1a, { emissive: 0xff2a4a, emissiveIntensity: 1.4 }));
+    heart.position.set(0, 1.5, 0.3); g.add(heart);
+    for (let i = 0; i < 5; i++) {
+      const sp = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.4, 4), mat(0xd8d0c0));
+      sp.position.set(rand(-0.3, 0.3), 2.55, rand(-0.2, 0.2)); g.add(sp);
     }
   } else if (kind === 'feral') {
     g.scale.set(0.9, 1.0, 0.9);
@@ -3896,6 +4005,7 @@ const MISSIONS = [
   { id: 'bridge', title: 'Western Crossing', desc: 'Bring 12 metal to the broken crossing on the western ravine and rebuild it (E at the marker).', target: 1 },
   { id: 'cache',  title: 'Hidden Cache', desc: 'Old logs mention a supply cache hidden in the far northern rocks.', target: 1 },
   { id: 'warlord', title: 'The Warlord', desc: 'A raider warlord rules a fortified camp in the far west. The settlers of Duskwell want their fields back.', target: 1 },
+  { id: 'nest', title: 'Cleanse the Nest', desc: 'An infected hive breeds the horde in the far south-east. Destroy its glowing core — and whatever crawls out to defend it.', target: 1 },
 ];
 const missionState = {};
 MISSIONS.forEach(m => missionState[m.id] = { progress: 0, done: false, locked: !!m.locked });
@@ -3929,9 +4039,13 @@ function completeMission(id) {
   else if (id === 'warlord') {
     player.res.cores += 3; player.res.m += 25; player.res.e += 15;
     setTimeout(() => showToast('Duskwell is free — loot the war chest at the camp (E)'), 2600);
-    // final mission clears the campaign → offer New Game+ once all done
-    setTimeout(offerNewGamePlus, 6000);
   }
+  else if (id === 'nest') {
+    player.res.cores += 4; player.res.b += 25; player.res.m += 20;
+    inventory.medkit += 3;
+  }
+  // clearing the whole campaign offers New Game+
+  if (MISSIONS.every(m => missionState[m.id].done)) setTimeout(offerNewGamePlus, 6000);
   updateCountersUI(); updateMissionTracker();
   saveGame(true);
 }
@@ -3968,6 +4082,22 @@ function offerNewGamePlus() {
 function onEnemyKilled(e) {
   missionProgress('secure', 1);
   if (e.wave) missionProgress('defend', 1);
+}
+// the hive breeds infected while you're near and it still lives
+function updateNest(dt) {
+  if (!nest || !nest.alive) return;
+  const d = Math.hypot(player.pos.x - NEST_POS.x, player.pos.z - NEST_POS.z);
+  if (d > 90) return;
+  nest.spawnT -= dt;
+  if (nest.spawnT <= 0) {
+    nest.spawnT = rand(4, 7);
+    if (enemies.filter(x => x.alive).length >= 16) return;
+    const a = rand(0, Math.PI * 2), r = rand(6, 10);
+    const e = spawnEnemy(pick(['shambler', 'feral', 'bloater']),
+      NEST_POS.x + Math.cos(a) * r, NEST_POS.z + Math.sin(a) * r);
+    e.state = 'chase'; e.alerted = true;
+    emit(nest.core.getWorldPosition(new THREE.Vector3()), 0xff3050, 4, 3, 0.4);
+  }
 }
 function activeMission() {
   for (const m of MISSIONS) {
@@ -4211,7 +4341,7 @@ function saveGame(silent) {
     pylons: pylons.map(p => p.active),
     bridgeBuilt, cacheFound, raiderLootFound,
     clock: Math.round(dayClock), inv: inventory, companion: hasCompanion,
-    mods: weaponMods, ngPlus,
+    mods: weaponMods, ngPlus, nestDown: !!(nest && !nest.alive),
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) {}
   if (!silent) showToast('💾 Game saved');
@@ -4256,6 +4386,13 @@ function loadGame() {
   Object.assign(inventory, d.inv || {});
   if (d.mods) d.mods.forEach((m, i) => { if (weaponMods[i]) Object.assign(weaponMods[i], m); });
   ngPlus = d.ngPlus || 0;
+  if (d.nestDown && nest && nest.alive) {   // collapse a previously-cleansed hive
+    nest.alive = false; nest.core.visible = false;
+    for (const s of nest.sacs) s.visible = false;
+    nest.mesh.scale.y = 0.35; nest.mesh.position.y -= 1.2;
+    removeFromArr(losBlockers, nest.blockers);
+    removeFromArr(cameraBlockers, nest.blockers);
+  }
   if (d.companion) spawnCompanion(false);
   return true;
 }
@@ -4416,6 +4553,10 @@ function seedEnemies() {
   // an infected pack haunting the old ruins in the north-east
   [[64, 118, 'shambler'], [72, 122, 'shambler'], [68, 126, 'bloater'],
    [76, 114, 'feral'], [70, 130, 'screamer']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
+  // hive guards around the infected nest (unless already cleansed)
+  if (!missionState.nest.done)
+    [[112, -116, 'shambler'], [130, -114, 'brute'], [118, -132, 'bloater'],
+     [128, -128, 'shambler'], [114, -128, 'feral']].forEach(([x, z, t]) => spawnEnemy(t, x, z));
   // raider camp garrison — the Warlord holds court until his mission is done
   const rc = RAIDER_CAMP;
   if (!missionState.warlord.done) {
@@ -4588,6 +4729,7 @@ function animate() {
     updateEvents(dt);
     updateCompanion(dt);
     updateNPCs(dt);
+    updateNest(dt);
     // dynamic combat music: intensity rises with nearby engaged enemies
     let threat = 0;
     for (const e of enemies)
@@ -4963,6 +5105,7 @@ function missionTargetPos() {
     case 'bridge': return [BRIDGE_SPOT.x, BRIDGE_SPOT.z];
     case 'cache': return [CACHE_POS.x, CACHE_POS.z];
     case 'warlord': return [RAIDER_CAMP.x, RAIDER_CAMP.z];
+    case 'nest': return [NEST_POS.x, NEST_POS.z];
   }
   return null;
 }
@@ -5000,6 +5143,7 @@ function updateMinimap() {
   dot(OBS_POS.x, OBS_POS.z, '#e8e4dc', 3, true);
   dot(VILLAGE_POS.x, VILLAGE_POS.z, '#b8e08a', 3.5, true);
   dot(RAIDER_CAMP.x, RAIDER_CAMP.z, '#ff8a5c', 3.5, true);
+  if (nest && nest.alive) dot(NEST_POS.x, NEST_POS.z, '#ff3050', 3.5, true);   // infected nest
   for (const p of pylons) dot(p.x, p.z, p.active ? '#5ff2d0' : '#68737f', 2.5);
   for (const e of enemies) if (e.alive)
     dot(e.mesh.position.x, e.mesh.position.z, (e.T && e.T.zombie) ? '#9ad83a' : '#ff4a5c', 2.5);
